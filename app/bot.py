@@ -227,7 +227,7 @@ def write_profiles_file():
     temporary = PROFILE_FILE.with_suffix(".json.tmp")
     temporary.write_text(payload, encoding="utf-8")
     if PROFILE_FILE.exists():
-        temporary_backup = PROFILE_BACKUP_FILE.with_suffix(".json.bak.tmp")
+        temporary_backup = PROFILE_FILE.with_suffix(".json.bak.tmp")
         temporary_backup.write_text(PROFILE_FILE.read_text(encoding="utf-8"), encoding="utf-8")
         temporary_backup.replace(PROFILE_BACKUP_FILE)
     temporary.replace(PROFILE_FILE)
