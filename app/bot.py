@@ -71,7 +71,7 @@ SKILL_FIELDS = (
     ("control", "Controle", "🎯"),
 )
 STYLE_SKILL_MAP = {
-    "tyre_management": None,
+    "tyre_management": "tyre_management",
     "curves": "curves",
     "speed": "straights",
     "qualifying": "braking",
@@ -142,6 +142,7 @@ class Driver:
     lap_segment_times: List[float] = field(default_factory=list)
     events: List[str] = field(default_factory=list)
     style_name: Optional[str] = None
+    style_tyre_management: int = 0
     style_curves: int = 0
     style_straights: int = 0
     style_braking: int = 0
@@ -371,6 +372,8 @@ for _profile in USER_PROFILES.values():
     if isinstance(_profile, dict):
         _profile["skills"] = migrate_skill_distribution(_profile.get("skills"))
         _profile.setdefault("ability", random.choice(list(ABILITY_CATALOG)))
+        _profile.setdefault("ability_collection", [_profile["ability"]] if _profile.get("ability") else [])
+        _profile.setdefault("ability_spins", 0)
         _profile.setdefault("skills_locked", True)
 try:
     write_profiles_file()
@@ -380,31 +383,31 @@ except OSError as exc:
 # Gacha de estilos: loja apenas visual; confirmação de compra não consulta a Loritta.
 RARITY_DATA = {
     "Comum": {
-        "points": 5,
+        "points": 6,
         "chance": 50,
         "color": 9807270,
         "emoji": "⚪"
     },
     "Incomum": {
-        "points": 8,
+        "points": 9,
         "chance": 28,
         "color": 3066993,
         "emoji": "🟢"
     },
     "Raro": {
-        "points": 11,
+        "points": 12,
         "chance": 15,
         "color": 3447003,
         "emoji": "🔵"
     },
     "Épico": {
-        "points": 15,
+        "points": 16,
         "chance": 5,
         "color": 10181046,
         "emoji": "🟣"
     },
     "Lendário": {
-        "points": 20,
+        "points": 21,
         "chance": 2,
         "color": 15844367,
         "emoji": "🟠"
@@ -894,6 +897,40 @@ PILOT_STYLES = [
     }
 ]
 
+# Expande os estilos para seis atributos. Cada raridade recebe +1 ponto.
+# Os estilos comuns/incomuns podem ter uma fraqueza real (atributo zerado).
+def expand_style_distributions():
+    keys = ("curves", "straights", "braking", "acceleration", "control")
+    for index, style in enumerate(PILOT_STYLES):
+        old = {key: max(0, int(style.get("skills", {}).get(key, 0))) for key in keys}
+        old_total = sum(old.values())
+        target = RARITY_DATA[style["rarity"]]["points"]
+        tyre_points = index % 3
+        remaining = target - tyre_points
+        if old_total:
+            exact = {key: old[key] * remaining / old_total for key in keys}
+            allocated = {key: int(value) for key, value in exact.items()}
+            remainder = remaining - sum(allocated.values())
+            for key in sorted(keys, key=lambda item: exact[item] - allocated[item], reverse=True)[:remainder]:
+                allocated[key] += 1
+        else:
+            allocated = {key: 0 for key in keys}
+            allocated["control"] = remaining
+        if style["rarity"] in ("Comum", "Incomum") and index % 2 == 0:
+            weakest = keys[index % len(keys)]
+            if allocated[weakest] == 0:
+                weakest = next(
+                    (keys[(index + offset) % len(keys)] for offset in range(1, len(keys)) if allocated[keys[(index + offset) % len(keys)]] > 0),
+                    weakest
+                )
+            lost = allocated[weakest]
+            allocated[weakest] = 0
+            strongest = max((key for key in keys if key != weakest), key=lambda key: allocated[key])
+            allocated[strongest] += lost
+        style["skills"] = {"tyre_management": tyre_points, **allocated}
+
+expand_style_distributions()
+
 # IDs dos cargos dos estilos: substitua None pelos IDs reais do seu servidor. NÃO invente IDs.
 PILOT_ROLE_IDS = {
     'Lance Stroll': 1570222401315147896,  # ID do cargo de Lance Stroll
@@ -992,6 +1029,8 @@ def gacha_profile(user_id: int):
     profile.setdefault("skip_roll_active", False)
     profile["skills"] = migrate_skill_distribution(profile.get("skills"))
     profile.setdefault("ability", random.choice(list(ABILITY_CATALOG)))
+    profile.setdefault("ability_collection", [profile["ability"]] if profile.get("ability") else [])
+    profile.setdefault("ability_spins", 0)
     if is_new_profile:
         save_profiles()
     return profile
@@ -1179,7 +1218,8 @@ class LobbyView(discord.ui.View):
                 control=int(saved_skills.get("control", 0)),
                 straights=int(saved_skills.get("speed", 0)), braking=int(saved_skills.get("qualifying", 0)),
                 acceleration=int(saved_skills.get("engine", 0)), ability=profile.get("ability"),
-                style_name=equipped, style_curves=int(bonuses.get("curves",0)),
+                style_name=equipped, style_tyre_management=int(bonuses.get("tyre_management",0)),
+                style_curves=int(bonuses.get("curves",0)),
                 style_straights=int(bonuses.get("straights",0)), style_braking=int(bonuses.get("braking",0)),
                 style_acceleration=int(bonuses.get("acceleration",0)), style_control=int(bonuses.get("control",0)),
             )
@@ -2003,7 +2043,7 @@ class ProfileView(discord.ui.View):
         profile=gacha_profile(self.owner_id); equipped=profile.get("equipped_style") or "Nenhum"
         gp="Sim" if profile.get("skip_roll_gamepass") else "Não"
         active="Ativa" if profile.get("skip_roll_gamepass") and profile.get("skip_roll_active") else "Desativada"
-        lines=[f"**Giros:** {profile['spins']}",f"**Estilo equipado:** {equipped}",f"**Gamepass Pular Giro:** {gp} • {active}","**Estilos possuídos:**"]
+        lines=[f"**Giros de estilo:** {profile['spins']}",f"**Giros de habilidade:** {profile.get('ability_spins', 0)}",f"**Habilidade equipada:** {profile.get('ability') or 'Nenhuma'}",f"**Habilidades obtidas:** {', '.join(profile.get('ability_collection', [])) or 'Nenhuma'}",f"**Estilo equipado:** {equipped}",f"**Gamepass Pular Giro:** {gp} • {active}","**Estilos possuídos:**"]
         lines += [f"{RARITY_DATA[s['rarity']]['emoji']} {s['name']} — {s['rarity']}" for s in profile['style_collection']]
         embed=discord.Embed(title="🎒 Inventário do piloto",description="\n".join(lines),color=discord.Color.blurple())
         await interaction.response.send_message(embed=embed,view=InventoryView(self.owner_id),ephemeral=True)
@@ -2110,6 +2150,24 @@ async def roll_style_command(ctx):
     embed=discord.Embed(title="🎰 Gacha de estilos da F1",description=(f"**Giros disponíveis: {profile['spins']}**\nClique para girar. O estilo só entra no inventário após Aceitar.\n\n"+"\n".join(f"{RARITY_DATA[r]['emoji']} **{r}** — {RARITY_DATA[r]['chance']}% • {RARITY_DATA[r]['points']} pontos" for r in RARITY_DATA)),color=discord.Color.purple())
     await ctx.send(embed=embed,view=GachaRollView(ctx.author.id))
 
+@bot.command(name="transferir-giros")
+async def transfer_style_spins(ctx, jogador: discord.Member, quantidade: int):
+    if jogador.bot:
+        return await ctx.send("Não é possível transferir giros para bots.")
+    if jogador.id == ctx.author.id:
+        return await ctx.send("Você não pode transferir giros para si mesmo.")
+    if quantidade <= 0:
+        return await ctx.send("Informe uma quantidade maior que zero.")
+    sender = gacha_profile(ctx.author.id)
+    receiver = gacha_profile(jogador.id)
+    if int(sender.get("spins", 0)) < quantidade:
+        return await ctx.send(f"Você tem apenas **{sender.get('spins', 0)}** giro(s) disponíveis.")
+    sender["spins"] -= quantidade
+    receiver["spins"] = int(receiver.get("spins", 0)) + quantidade
+    save_profiles()
+    await ctx.send(f"🎟️ {ctx.author.mention} transferiu **{quantidade} giro(s) de estilo** para {jogador.mention}.\nSaldo restante: **{sender['spins']}** giros.")
+
+
 @bot.command(name="roll-pendente")
 async def pending_roll_command(ctx):
     profile = gacha_profile(ctx.author.id)
@@ -2125,9 +2183,104 @@ async def pending_roll_command(ctx):
 
 @bot.command(name="loja")
 async def shop_command(ctx):
-    profile=gacha_profile(ctx.author.id)
-    embed=discord.Embed(title="🛒 Loja informativa — F1 Discord Racing",description=(f"**Seus giros:** {profile['spins']}\n\n**Pacotes de giros**\n1 giro — 5k sonhos\n5 giros — 25k sonhos\n10 giros — 50k sonhos\n25 giros — 125k sonhos\n\n**Gamepass: Pular Giro**\nPermite pular o loading do roll quando ativada pelo administrador.\n\n⚠️ **Pagamento diretamente com o administrador do servidor.** A loja não aceita pagamentos, não concede giros e não desconta sonhos automaticamente. Após pagamento externo, o administrador libera os itens manualmente."),color=discord.Color.gold())
-    await ctx.send(embed=embed,view=ShopView())
+    profile = gacha_profile(ctx.author.id)
+    embed = discord.Embed(
+        title="🛒 Loja informativa — F1 Discord Racing",
+        description=(
+            f"**Seus giros de estilo:** {profile['spins']}\n"
+            f"**Seus giros de habilidade:** {profile.get('ability_spins', 0)}\n\n"
+            "**Pacotes de giros de estilo**\n"
+            "1 giro — 5k sonhos\n5 giros — 25k sonhos\n10 giros — 50k sonhos\n25 giros — 125k sonhos\n\n"
+            "**✨ Giro de habilidade**\n"
+            "1 giro — **25k sonhos**\nCada giro sorteia uma habilidade especial.\n\n"
+            "**Gamepass: Pular Giro**\nPermite pular o loading do roll quando ativada pelo administrador.\n\n"
+            "⚠️ **Pagamento diretamente com o administrador do servidor.** O bot não consulta nem desconta sonhos automaticamente. "
+            "Após o pagamento, o administrador libera o giro correspondente."
+        ),
+        color=discord.Color.gold()
+    )
+    await ctx.send(embed=embed, view=ShopView())
+
+class AbilityRollConfirmView(discord.ui.View):
+    def __init__(self, owner_id, ability_name):
+        super().__init__(timeout=180)
+        self.owner_id = owner_id
+        self.ability_name = ability_name
+
+    async def finish(self, interaction, accept):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Este resultado pertence a outro jogador.", ephemeral=True)
+        profile = gacha_profile(self.owner_id)
+        if profile.get("pending_ability_roll") != self.ability_name:
+            return await interaction.response.send_message("Resultado pendente não encontrado.", ephemeral=True)
+        if accept:
+            profile["ability"] = self.ability_name
+            owned = profile.setdefault("ability_collection", [])
+            if self.ability_name not in owned:
+                owned.append(self.ability_name)
+            message = f"✨ Habilidade **{self.ability_name}** equipada com sucesso!"
+        else:
+            message = f"🗑️ Habilidade **{self.ability_name}** recusada. Sua habilidade anterior foi mantida."
+        profile.pop("pending_ability_roll", None)
+        save_profiles()
+        embed = discord.Embed(title="✨ Resultado do giro de habilidade", description=f"**{self.ability_name}**\n{ABILITY_CATALOG[self.ability_name]}", color=discord.Color.gold())
+        await interaction.response.edit_message(content=message, embed=embed, view=None)
+
+    @discord.ui.button(label="Equipar habilidade", emoji="✅", style=discord.ButtonStyle.success)
+    async def accept(self, interaction, button):
+        await self.finish(interaction, True)
+
+    @discord.ui.button(label="Recusar", emoji="❌", style=discord.ButtonStyle.danger)
+    async def refuse(self, interaction, button):
+        await self.finish(interaction, False)
+
+
+class AbilityRollView(discord.ui.View):
+    def __init__(self, owner_id):
+        super().__init__(timeout=None)
+        self.owner_id = owner_id
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                item.custom_id = f"f1:ability:spin:{owner_id}"
+
+    @discord.ui.button(label="Girar habilidade", emoji="✨", style=discord.ButtonStyle.primary)
+    async def spin(self, interaction, button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Este painel pertence a outro jogador.", ephemeral=True)
+        profile = gacha_profile(self.owner_id)
+        if profile.get("pending_ability_roll"):
+            return await interaction.response.send_message("Você já tem uma habilidade pendente. Confirme ou recuse antes de girar novamente.", ephemeral=True)
+        if int(profile.get("ability_spins", 0)) < 1:
+            return await interaction.response.send_message("Você não tem giros de habilidade. Cada giro custa 25k sonhos na loja.", ephemeral=True)
+        ability_name = random.choice(list(ABILITY_CATALOG))
+        profile["ability_spins"] -= 1
+        profile["pending_ability_roll"] = ability_name
+        save_profiles()
+        await interaction.response.edit_message(embed=discord.Embed(title="✨ GIRANDO HABILIDADE...", description="A roleta está sorteando sua habilidade especial...", color=discord.Color.dark_grey()), view=None)
+        await asyncio.sleep(2)
+        result = discord.Embed(title=f"✨ HABILIDADE SORTEADA: {ability_name}", description=f"{ABILITY_CATALOG[ability_name]}\n\nDeseja equipar esta habilidade?", color=discord.Color.gold())
+        try:
+            await interaction.message.edit(embed=result, view=AbilityRollConfirmView(self.owner_id, ability_name))
+        except discord.HTTPException:
+            pass
+
+
+@bot.command(name="roll-habilidade")
+async def roll_ability_command(ctx):
+    profile = gacha_profile(ctx.author.id)
+    embed = discord.Embed(title="✨ Roleta de habilidades especiais", description=f"**Giros disponíveis:** {profile.get('ability_spins', 0)}\n**Custo:** 25.000 sonhos por giro\n\nClique para sortear uma habilidade. Você poderá equipar ou recusar o resultado.", color=discord.Color.gold())
+    await ctx.send(embed=embed, view=AbilityRollView(ctx.author.id))
+
+
+@bot.command(name="habilidade-pendente")
+async def pending_ability_command(ctx):
+    profile = gacha_profile(ctx.author.id)
+    ability_name = profile.get("pending_ability_roll")
+    if not ability_name or ability_name not in ABILITY_CATALOG:
+        return await ctx.send("Você não possui uma habilidade pendente.")
+    embed = discord.Embed(title=f"✨ Habilidade pendente: {ability_name}", description=f"{ABILITY_CATALOG[ability_name]}\n\nDeseja equipar?", color=discord.Color.gold())
+    await ctx.send(embed=embed, view=AbilityRollConfirmView(ctx.author.id, ability_name))
+
 
 @bot.command(name="colecao-estilos")
 async def style_collection_command(ctx):
@@ -2194,6 +2347,17 @@ async def adicionar_giros(interaction: discord.Interaction,jogador: discord.Memb
     profile=gacha_profile(jogador.id); profile["spins"]+=quantidade; save_profiles()
     await send_admin_receipt(interaction.guild, interaction.user, jogador, "Adicionar giros", f"+{quantidade} giro(s). Total agora: {profile['spins']}")
     await interaction.response.send_message(f"🎟️ Adicionados {quantidade} giro(s) para {jogador.mention}. Total: **{profile['spins']}**.",ephemeral=True)
+
+@bot.tree.command(name="adicionar_giros_habilidade", description="Libera giros de habilidade após pagamento externo")
+@app_commands.describe(jogador="Jogador que receberá os giros", quantidade="Quantidade de giros de habilidade")
+@app_commands.checks.has_permissions(administrator=True)
+async def adicionar_giros_habilidade(interaction: discord.Interaction, jogador: discord.Member, quantidade: app_commands.Range[int, 1, 10000]):
+    profile = gacha_profile(jogador.id)
+    profile["ability_spins"] = int(profile.get("ability_spins", 0)) + quantidade
+    save_profiles()
+    await send_admin_receipt(interaction.guild, interaction.user, jogador, "Adicionar giros de habilidade", f"+{quantidade} giro(s). Total: {profile['ability_spins']}")
+    await interaction.response.send_message(f"✨ Adicionados **{quantidade} giro(s) de habilidade** para {jogador.mention}. Total: **{profile['ability_spins']}**.", ephemeral=True)
+
 
 @bot.tree.command(name="setar_estilo", description="Define diretamente o estilo equipado de um jogador (admin)")
 @app_commands.describe(jogador="Pessoa que receberá o estilo", estilo="Nome exato do piloto/estilo")
@@ -2399,13 +2563,13 @@ SYSTEM_PAGES = ("estilos", "pneus", "habilidades", "pilotagem", "novidades")
 def system_embed(page):
     if page == "estilos":
         rarity_lines = [f"{data['emoji']} **{rarity}** — {data['points']} pontos extras • chance {data['chance']}%" for rarity, data in RARITY_DATA.items()]
-        stat_labels = {"curves":"CUR","straights":"RET","braking":"CLA","acceleration":"MOT","control":"CTL"}
+        stat_labels = {"tyre_management":"PNE","curves":"CUR","straights":"RET","braking":"CLA","acceleration":"MOT","control":"CTL"}
         style_lines = []
         for style in PILOT_STYLES:
             vals = " ".join(f"{stat_labels[k]}+{v}" for k, v in style.get("skills", {}).items() if v)
             style_lines.append(f"• **{style['name']}** ({style['rarity']}): {vals or 'sem bônus'}")
         description = "**Raridades e pontos extras**\n" + "\n".join(rarity_lines)
-        description += "\n\n**Como ler os bônus**\nCUR = Curvas • RET = Velocidade em retas • CLA = Classificação/frenagem • MOT = Motor/aceleração • CTL = Controle. Os bônus são somados aos atributos pessoais durante a corrida."
+        description += "\n\n**Como ler os bônus**\nPNE = Gerenciamento de pneus • CUR = Curvas • RET = Velocidade em retas • CLA = Classificação/frenagem • MOT = Motor/aceleração • CTL = Controle. Os bônus são somados aos atributos pessoais durante a corrida. Cada estilo tem uma distribuição própria e pode ter atributos zerados."
         description += "\n\n**Estilos disponíveis**\n" + "\n".join(style_lines)
         if len(description) > 4000:
             description = description[:3900] + "\n… (catálogo completo permanece no código/coleção de estilos)."
@@ -2417,7 +2581,7 @@ def system_embed(page):
         return discord.Embed(title="🛞 Pneus e clima", description="O composto escolhido altera aderência, ritmo e desgaste. Escolha conforme a condição da pista.\n\n" + "\n\n".join(lines), color=discord.Color.orange())
     if page == "habilidades":
         lines = [f"✨ **{name}** — {description}" for name, description in ABILITY_CATALOG.items()]
-        return discord.Embed(title="✨ Habilidades especiais", description="Cada piloto recebe uma habilidade passiva sorteada uma única vez. Não existe comando para rerrolar.\n\n" + "\n".join(lines), color=discord.Color.gold())
+        return discord.Embed(title="✨ Habilidades especiais", description="As habilidades passivas podem ser obtidas pela roleta `!roll-habilidade`, por 25k sonhos cada giro.\n\n" + "\n".join(lines), color=discord.Color.gold())
     if page == "pilotagem":
         mode_lines = [f"**{data['label']}** — ritmo {data['pace']:+.2f} • risco {data['risk']:+.2f} • defesa {data['defense']:+.2f} • ataque {data['attack']:+.2f}" for data in DRIVING_MODES.values()]
         skill_lines = [f"{emoji} **{label}** — atributo pessoal; os 10 pontos são distribuídos uma vez e ficam bloqueados." for key, label, emoji in SKILL_FIELDS]
@@ -2429,7 +2593,7 @@ def system_embed(page):
         "**Novidades desta versão**\n"
         "• Seis atributos pessoais: gerenciamento de pneus, curvas, velocidade, classificação, motor e controle.\n"
         "• Distribuição fixa de 10 pontos por piloto.\n"
-        "• Habilidade especial passiva sorteada uma única vez.\n"
+        "• Habilidades especiais obtidas pela roleta, por 25k sonhos cada giro.\n"
         "• Campeonato com pontuação, histórico, ranking e estatísticas persistentes.\n"
         "• Pontos do campeonato: 10 / 7 / 5 / 3 / 1; +1 pela volta mais rápida se terminar no top 3.\n"
         "• Imagens de eventos configuráveis por pastas e links, com seleção aleatória.\n"
@@ -2465,7 +2629,7 @@ async def commands_list(ctx):
     embed = discord.Embed(title="📜 Comandos do F1 Discord Racing", color=discord.Color.blue())
     embed.description = (
         "`!f1` — cria um lobby; o host usa os botões do próprio painel para configurar, classificar e iniciar.\n"
-        "`!perfil` — configura nome, idade, equipe, foto, estilo e inventário.\n`!roll-estilo` — roleta gacha de estilos de pilotos F1.\n`!roll-pendente` — recupera resultado aguardando confirmação.\n`!loja` — loja visual de giros (sonhos da Loritta; confirmação manual).\n`!colecao-estilos` — mostra estilos obtidos.\n`/adicionar_giros`, `/deletar_giros`, `/setar_estilo` e `/gamepass` — administração de giros/estilos.\n"
+        "`!perfil [@membro]` — consulta seu perfil ou o de outro piloto.\n`!roll-estilo` — roleta gacha de estilos de pilotos F1.\n`!transferir-giros @membro quantidade` — transfere giros de estilo.\n`!roll-habilidade` — roleta de habilidades especiais (25k sonhos por giro).\n`!habilidade-pendente` — recupera um resultado pendente.\n`!roll-pendente` — recupera resultado aguardando confirmação.\n`!loja` — loja visual de giros (sonhos da Loritta; confirmação manual).\n`!colecao-estilos` — mostra estilos obtidos.\n`/adicionar_giros`, `/adicionar_giros_habilidade`, `/deletar_giros`, `/setar_estilo` e `/gamepass` — administração de giros/estilos/habilidades.\n"
         "`!ajuda` — guia de funcionamento e explicação das estratégias.\n"
         "`!campeonato` / `!ranking` / `!estatisticas` / `!temporada` / `!resultado` — consultar campeonato, etapa e desempenho.\n"
         "`!iniciartemporada` / `!finalizartemporada` / `!resetcampeonato` — gestão de temporada (administradores).\n"
@@ -2483,7 +2647,7 @@ async def help_f1(ctx):
     embed = discord.Embed(title="📘 Guia de corrida — F1 Discord Racing", color=discord.Color.green())
     embed.description = (
         "**1) Criar e entrar:** use `!f1`. Pilotos clicam Entrar na corrida, configuram o carro e os pneus, e marcam Estou pronto.\n"
-        "**2) Perfil/crachá:** `!perfil` mostra estilo equipado, cargo, dados pessoais e botões Configurar/Inventário.\n**3) Gacha:** `!roll-estilo` permite gastar giros para obter estilos de pilotos. `!loja` mostra pacotes em sonhos; a compra é confirmada manualmente e o bot não desconta sonhos. `!colecao-estilos` lista os estilos recebidos. Os estilos têm raridades e pontos extras próprios. Nome aparece na corrida; equipe e pneu favorito são visuais, sem impacto na simulação. Perfil salvo é carregado no próximo lobby; os pontos pessoais só podem ser distribuídos uma vez e depois ficam bloqueados.\n"
+        "**2) Perfil/crachá:** `!perfil [@membro]` consulta o próprio perfil ou o perfil de outro piloto; os botões de configuração aparecem apenas no próprio perfil.\n**3) Gacha:** `!roll-estilo` permite gastar giros para obter estilos de pilotos. `!transferir-giros @membro quantidade` envia giros de estilo para outro membro. `!roll-habilidade` usa um giro de habilidade liberado pelo administrador após pagamento de 25k sonhos. `!loja` mostra pacotes em sonhos; a compra é confirmada manualmente e o bot não desconta sonhos. `!colecao-estilos` lista os estilos recebidos. Os estilos têm raridades e pontos extras próprios. Nome aparece na corrida; equipe e pneu favorito são visuais, sem impacto na simulação. Perfil salvo é carregado no próximo lobby; os pontos pessoais só podem ser distribuídos uma vez e depois ficam bloqueados.\n"
         "**4) Classificação:** o host clica Iniciar classificação no painel do lobby. A classificação usa habilidades, pneus, clima e uma variação aleatória moderada para definir o grid.\n"
         "**5) Corrida:** o host clica Iniciar corrida no painel de classificação. Cada volta é dividida em quatro trechos de reta/curva. Em cada trecho, todos escolhem pelos mesmos botões públicos; a escolha fica oculta até todos confirmarem. O prazo é 45 segundos (ou o valor configurado); quem não decidir recebe Seguro.\n\n"
         "**AÇÕES DE PILOTAGEM**\n"
@@ -2498,7 +2662,7 @@ async def help_f1(ctx):
         "• Soft: rápido, mas desgasta muito. Medium: equilíbrio. Hard: menos aderência, maior durabilidade. Intermediate: indicado para pista úmida. Wet: melhor para chuva forte, mas fraco em pista seca. Pneus inadequados prejudicam o ritmo.\n"
         "• O desgaste reduz a condição do pneu ao longo dos segmentos. A energia é limitada e pode ser recuperada um pouco com Normal/Seguro. Clima chuvoso aumenta a perda de ritmo e o risco.\n"
         "• Erros e derrapagens são eventos probabilísticos; Controle, modo escolhido, chuva e desgaste influenciam o risco.\n"
-        "• Habilidades especiais são sorteadas uma única vez por piloto e funcionam separadamente dos atributos e dos estilos do gacha.\n"
+        "• Habilidades especiais podem ser obtidas com `!roll-habilidade`; cada giro custa 25k sonhos e é liberado pelo administrador após pagamento. Use `!habilidade-pendente` se precisar recuperar um resultado interrompido.\n"
         "• Campeonato: 1º 10 pts, 2º 7, 3º 5, 4º 3, 5º 1; volta mais rápida vale +1 se o piloto terminar no top 3. Abandono não pontua.\n\n"
         "**Botões de gestão:** Configurar corrida permite ao host escolher voltas, circuito, clima e prazo de decisão. Iniciar classificação e Iniciar corrida avançam o fluxo sem comandos separados."
     )
@@ -2521,52 +2685,64 @@ def style_image_url(style_name):
 
 
 def build_profile_embed(profile, member, guild):
-    equipped=profile.get("equipped_style")
-    style=next((s for s in profile["style_collection"] if s["name"]==equipped),None)
-    role_id=PILOT_ROLE_IDS.get(equipped) if equipped else None
-    role=guild.get_role(role_id) if guild and role_id else None
-    style_label=role.mention if role else (f"**{equipped}** (cargo não configurado)" if equipped else "Nenhum estilo equipado")
-    desc=(f"**🏷️ Piloto:** {profile.get('name') or member.display_name}\n"
-          f"**🎂 Idade:** {profile.get('age') or 'Não definida'}\n**🏢 Equipe:** {profile.get('team') or 'Não definida'}\n"
-          f"**🏎️ Estilo equipado:** {style_label}\n")
-    personal=profile.get("skills", dict(PROFILE_PRESETS["balanced"]["skills"]))
-    bonuses=style.get("skills", {}) if style else {}
-    desc += "\n**📊 Atributos pessoais (10 pontos)**\n"
-    desc += " • ".join(f"{label}: {personal.get(key,0)}" for key,label,emoji in SKILL_FIELDS)
-    desc += f"\n\n**✨ Habilidade especial:** {profile.get('ability') or 'Não definida'}\n_{ABILITY_CATALOG.get(profile.get('ability'), 'Habilidade passiva sorteada uma única vez.')}_"
-    desc += "\n\n**🏆 Bônus do estilo**\n"
-    style_values = {key: int(bonuses.get(source, 0)) if source else 0 for key, source in STYLE_SKILL_MAP.items()}
-    desc += " • ".join(f"{label}: +{style_values.get(key,0)}" for key,label,emoji in SKILL_FIELDS) if style else "Nenhum estilo equipado."
-    desc += "\n\n**⚙️ Atributos finais (pessoal + estilo)**\n"
-    desc += " • ".join(f"{label}: {int(personal.get(key,0))+style_values.get(key,0)}" for key,label,emoji in SKILL_FIELDS)
+    equipped = profile.get("equipped_style")
+    collection = profile.get("style_collection", [])
+    style = next((item for item in collection if item.get("name") == equipped), None)
+    role_id = PILOT_ROLE_IDS.get(equipped) if equipped else None
+    role = guild.get_role(role_id) if guild and role_id else None
+    style_label = role.mention if role else (f"**{equipped}** (cargo não configurado)" if equipped else "Nenhum estilo equipado")
+    desc = (
+        f"**🏷️ Piloto:** {profile.get('name') or member.display_name}\n"
+        f"**🎂 Idade:** {profile.get('age') or 'Não definida'}\n"
+        f"**🏢 Equipe:** {profile.get('team') or 'Não definida'}"
+    )
     if guild:
         season = season_for(guild.id)
         if season:
             rows = championship_table(season)
             ranking = next((i for i, row in enumerate(rows, 1) if row["user_id"] == str(member.id)), None)
             points = next((row["points"] for row in rows if row["user_id"] == str(member.id)), 0)
-            desc += f"\\n\\n**🏆 Campeonato atual:** P{ranking} • {points} pontos" if ranking else "\\n\\n**🏆 Campeonato atual:** ainda sem pontuação"
+            championship_line = f"**🏆 Campeonato atual:** P{ranking} • {points} pontos" if ranking else "**🏆 Campeonato atual:** ainda sem pontuação"
         else:
-            desc += "\\n\\n**🏆 Campeonato:** nenhuma temporada ativa"
-    embed=discord.Embed(title="🏎️ Perfil do piloto",description=desc,color=discord.Color.orange())
+            championship_line = "**🏆 Campeonato:** nenhuma temporada ativa"
+        desc += f"\n{championship_line}"
+    desc += f"\n**🏎️ Estilo equipado:** {style_label}\n"
+    personal = profile.get("skills", migrate_skill_distribution({}))
+    bonuses = style.get("skills", {}) if style else {}
+    desc += "\n**📊 Atributos pessoais (10 pontos)**\n"
+    desc += " • ".join(f"{label}: {personal.get(key, 0)}" for key, label, _ in SKILL_FIELDS)
+    ability = profile.get("ability")
+    desc += f"\n\n**✨ Habilidade equipada:** {ability or 'Não definida'}\n_{ABILITY_CATALOG.get(ability, 'Habilidade passiva.')}_"
+    style_values = {key: int(bonuses.get(source, 0)) if source else 0 for key, source in STYLE_SKILL_MAP.items()}
+    desc += "\n\n**🏆 Bônus do estilo**\n"
+    desc += " • ".join(f"{label}: +{style_values.get(key, 0)}" for key, label, _ in SKILL_FIELDS) if style else "Nenhum estilo equipado."
+    desc += "\n\n**⚙️ Atributos finais (pessoal + estilo)**\n"
+    desc += " • ".join(f"{label}: {int(personal.get(key, 0)) + style_values.get(key, 0)}" for key, label, _ in SKILL_FIELDS)
+    embed = discord.Embed(title="🏎️ Perfil do piloto", description=desc, color=discord.Color.orange())
     image_url = style_image_url(equipped) if equipped else None
     image_url = image_url or profile.get("photo_url")
-    if image_url: embed.set_image(url=image_url)
+    if image_url:
+        embed.set_image(url=image_url)
     return embed
+
 
 async def refresh_profile_message(interaction, message_id, profile):
     if not message_id or not interaction.channel or not interaction.guild:
         return
     try:
-        message=await interaction.channel.fetch_message(message_id)
+        message = await interaction.channel.fetch_message(message_id)
         await message.edit(embed=build_profile_embed(profile, interaction.user, interaction.guild), view=ProfileView(interaction.user.id))
     except discord.HTTPException:
         pass
 
+
 @bot.command(name="perfil")
-async def profile_command(ctx):
-    profile=gacha_profile(ctx.author.id)
-    await ctx.send(embed=build_profile_embed(profile, ctx.author, ctx.guild), view=ProfileView(ctx.author.id))
+async def profile_command(ctx, membro: Optional[discord.Member] = None):
+    target = membro or ctx.author
+    profile = gacha_profile(target.id)
+    view = ProfileView(ctx.author.id) if target.id == ctx.author.id else None
+    await ctx.send(embed=build_profile_embed(profile, target, ctx.guild), view=view)
+
 
 @bot.command(name="f1")
 async def create_race(ctx):
@@ -2636,6 +2812,7 @@ async def on_ready():
     if not _persistent_gacha_views_registered:
         for user_id in USER_PROFILES.keys():
             bot.add_view(GachaRollView(int(user_id)))
+            bot.add_view(AbilityRollView(int(user_id)))
         _persistent_gacha_views_registered = True
     try:
         synced = await bot.tree.sync()
