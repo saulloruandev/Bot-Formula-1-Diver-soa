@@ -1,0 +1,193 @@
+{
+  "1394737386021191810": {
+    "name": "",
+    "age": null,
+    "team": "",
+    "photo_url": "",
+    "skills": {
+      "curves": 2,
+      "straights": 2,
+      "braking": 2,
+      "acceleration": 2,
+      "control": 2
+    },
+    "spins": 1,
+    "style_collection": [
+      {
+        "name": "Max Verstappen",
+        "rarity": "Épico",
+        "skills": {
+          "curves": 4,
+          "straights": 3,
+          "braking": 3,
+          "acceleration": 3,
+          "control": 2
+        },
+        "trait": "Precisão e agressividade"
+      }
+    ],
+    "equipped_style": "Max Verstappen",
+    "skip_roll_gamepass": false,
+    "skip_roll_active": false
+  },
+  "771534648894423111": {
+    "name": "Lewis Polar",
+    "age": 23,
+    "team": "Mercedes",
+    "photo_url": "https://i.pinimg.com/736x/a4/5d/aa/a45daa21af53ea089f6328ac69dc87ae.jpg",
+    "skills": {
+      "curves": 2,
+      "straights": 2,
+      "braking": 2,
+      "acceleration": 2,
+      "control": 2
+    },
+    "spins": 0,
+    "style_collection": [
+      {
+        "name": "Jenson Button",
+        "rarity": "Raro",
+        "skills": {
+          "curves": 2,
+          "straights": 2,
+          "braking": 2,
+          "acceleration": 1,
+          "control": 4
+        },
+        "trait": "Adaptação e controle"
+      }
+    ],
+    "equipped_style": "Jenson Button",
+    "skip_roll_gamepass": true,
+    "skip_roll_active": true
+  },
+  "526126360696193025": {
+    "name": "N1 Verstappen",
+    "age": 19,
+    "team": "Red Bull",
+    "photo_url": "https://media.discordapp.net/attachments/1491187511823827176/1501767818561982624/d2e1496eadc5095e9ea27b05896876aa.png?ex=6af71a05&is=6af5c885&hm=c327ef920bbb474537740e0cf0b578477665ec24c5538459c1daf17181bc14ca&=&format=webp&quality=lossless",
+    "skills": {
+      "curves": 2,
+      "straights": 2,
+      "braking": 2,
+      "acceleration": 2,
+      "control": 2
+    },
+    "spins": 0,
+    "style_collection": [
+      {
+        "name": "Felipe Massa",
+        "rarity": "Incomum",
+        "skills": {
+          "curves": 2,
+          "straights": 2,
+          "braking": 2,
+          "acceleration": 1,
+          "control": 1
+        },
+        "trait": "Curvas e consistência"
+      }
+    ],
+    "equipped_style": "Felipe Massa",
+    "skip_roll_gamepass": false,
+    "skip_roll_active": false
+  },
+  "1317440331272294432": {
+    "name": "Kyoto Aura Russel",
+    "age": 22,
+    "team": "Mercedes",
+    "photo_url": "https://cdn.discordapp.com/attachments/1317630555734544386/1570267741284474950/IMG_7305.jpg?ex=6af7220b&is=6af5d08b&hm=d1f16b4f3bf20a135d2b9326f68f7eb614662f4cc3cdf7c63c83d4b99b90c803&",
+    "skills": {
+      "curves": 2,
+      "straights": 2,
+      "braking": 2,
+      "acceleration": 2,
+      "control": 2
+    },
+    "spins": 0,
+    "style_collection": [],
+    "equipped_style": null,
+    "skip_roll_gamepass": false,
+    "skip_roll_active": false
+  },
+  "649329918538416169": {
+    "name": "",
+    "age": null,
+    "team": "",
+    "photo_url": "",
+    "skills": {
+      "curves": 2,
+      "straights": 2,
+      "braking": 2,
+      "acceleration": 2,
+      "control": 2
+    },
+    "spins": 6,
+    "style_collection": [
+      {
+        "name": "Kimi Räikkönen",
+        "rarity": "Épico",
+        "skills": {
+          "curves": 3,
+          "straights": 3,
+          "braking": 3,
+          "acceleration": 3,
+          "control": 3
+        },
+        "trait": "Controle e ritmo"
+      }
+    ],
+    "equipped_style": "Kimi Räikkönen",
+    "skip_roll_gamepass": false,
+    "skip_roll_active": false
+  },
+  "852619974522568716": {
+    "name": "",
+    "age": null,
+    "team": "",
+    "photo_url": "",
+    "skills": {
+      "curves": 2,
+      "straights": 2,
+      "braking": 2,
+      "acceleration": 2,
+      "control": 2
+    },
+    "spins": 2,
+    "style_collection": [
+      {
+        "name": "Charles Leclerc",
+        "rarity": "Raro",
+        "skills": {
+          "curves": 3,
+          "straights": 2,
+          "braking": 2,
+          "acceleration": 2,
+          "control": 2
+        },
+        "trait": "Ataque em curvas e frenagem"
+      }
+    ],
+    "equipped_style": "Charles Leclerc",
+    "skip_roll_gamepass": false,
+    "skip_roll_active": false
+  },
+  "1283923076869918740": {
+    "name": "Carlos Henrique",
+    "age": 22,
+    "team": "Mercedes",
+    "photo_url": "https://cdn.discordapp.com/attachments/1570190023419236392/1570528851640189039/878892f855ccd6275096f277bf216846.jpg?ex=6af76c79&is=6af61af9&hm=19cfcdf8f5e82087d8352c8985797fd7e18b2acb6791ed040c1ae21a4a82095f&",
+    "skills": {
+      "curves": 2,
+      "straights": 2,
+      "braking": 2,
+      "acceleration": 2,
+      "control": 2
+    },
+    "spins": 0,
+    "style_collection": [],
+    "equipped_style": null,
+    "skip_roll_gamepass": false,
+    "skip_roll_active": false
+  }
+}
