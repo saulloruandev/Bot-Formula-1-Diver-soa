@@ -215,8 +215,22 @@ class Race:
 
 races: Dict[int, Race] = {}
 
-# Perfis são guardados localmente para sobreviver a reinícios do bot.
+# Dados mutáveis dos jogadores ficam fora do controle de versão.
+# O arquivo permanece em app/profiles.json na instalação local, mas é ignorado pelo Git.
 PROFILE_FILE = Path(__file__).with_name("profiles.json")
+PROFILE_BACKUP_FILE = PROFILE_FILE.with_suffix(".json.bak")
+
+def write_profiles_file():
+    """Salva perfis de forma atômica e mantém um backup do arquivo anterior."""
+    PROFILE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(USER_PROFILES, ensure_ascii=False, indent=2)
+    temporary = PROFILE_FILE.with_suffix(".json.tmp")
+    temporary.write_text(payload, encoding="utf-8")
+    if PROFILE_FILE.exists():
+        temporary_backup = PROFILE_BACKUP_FILE.with_suffix(".json.bak.tmp")
+        temporary_backup.write_text(PROFILE_FILE.read_text(encoding="utf-8"), encoding="utf-8")
+        temporary_backup.replace(PROFILE_BACKUP_FILE)
+    temporary.replace(PROFILE_FILE)
 PROFILE_PRESETS = {
     "balanced": {
         "label": "Piloto equilibrado",
@@ -359,9 +373,9 @@ for _profile in USER_PROFILES.values():
         _profile.setdefault("ability", random.choice(list(ABILITY_CATALOG)))
         _profile.setdefault("skills_locked", True)
 try:
-    PROFILE_FILE.write_text(json.dumps(USER_PROFILES, ensure_ascii=False, indent=2), encoding="utf-8")
-except OSError:
-    pass
+    write_profiles_file()
+except OSError as exc:
+    print(f"⚠️ Não foi possível salvar os perfis na inicialização: {exc}")
 
 # Gacha de estilos: loja apenas visual; confirmação de compra não consulta a Loritta.
 RARITY_DATA = {
@@ -992,7 +1006,11 @@ def roll_style():
     return random.choice(candidates)
 
 def save_profiles():
-    PROFILE_FILE.write_text(json.dumps(USER_PROFILES, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        write_profiles_file()
+    except OSError as exc:
+        print(f"⚠️ Erro ao salvar perfis: {exc}")
+        raise
 
 def profile_for(user_id: int):
     return USER_PROFILES.get(str(user_id))
