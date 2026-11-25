@@ -2411,18 +2411,71 @@ async def adicionar_giros_habilidade(interaction: discord.Interaction, jogador: 
     await interaction.response.send_message(f"✨ Adicionados **{quantidade} giro(s) de habilidade** para {jogador.mention}. Total: **{profile['ability_spins']}**.", ephemeral=True)
 
 
-@bot.tree.command(name="setar_estilo", description="Define diretamente o estilo equipado de um jogador (admin)")
-@app_commands.describe(jogador="Pessoa que receberá o estilo", estilo="Nome exato do piloto/estilo")
+def find_style_by_keyword(keyword: str):
+    """Busca estilo por nome completo, início ou trecho; retorna (estilo, opções)."""
+    query = keyword.strip().casefold()
+    if not query:
+        return None, []
+    exact = [item for item in PILOT_STYLES if item["name"].casefold() == query]
+    if exact:
+        return exact[0], exact
+    starts = [item for item in PILOT_STYLES if item["name"].casefold().startswith(query)]
+    if len(starts) == 1:
+        return starts[0], starts
+    if starts:
+        return None, starts
+    contains = [item for item in PILOT_STYLES if query in item["name"].casefold()]
+    if len(contains) == 1:
+        return contains[0], contains
+    return None, contains
+
+@bot.tree.command(name="setar_estilo", description="Define o estilo de um jogador pelo nome ou palavra-chave (admin)")
+@app_commands.describe(jogador="Pessoa que receberá o estilo", estilo="Nome ou palavra-chave, exemplo: prost, senna")
 @app_commands.checks.has_permissions(administrator=True)
 async def setar_estilo(interaction: discord.Interaction, jogador: discord.Member, estilo: str):
-    chosen = next((item for item in PILOT_STYLES if item["name"].casefold() == estilo.strip().casefold()), None)
+    chosen, matches = find_style_by_keyword(estilo)
     if chosen is None:
-        return await interaction.response.send_message("Estilo não encontrado. Use o nome exato de um dos pilotos da coleção.", ephemeral=True)
+        if matches:
+            options = "\n".join(f"• {item['name']} ({item['rarity']})" for item in matches[:15])
+            return await interaction.response.send_message(
+                f"Encontrei mais de um estilo para **{estilo}**. Seja mais específico:\n{options}",
+                ephemeral=True,
+            )
+        return await interaction.response.send_message(
+            f"Não encontrei estilo com a palavra **{estilo}**. Tente uma parte do nome, como prost ou senna.",
+            ephemeral=True,
+        )
     profile = gacha_profile(jogador.id)
     role, warning = await equip_style_consistently(interaction.guild, jogador, profile, dict(chosen))
     await send_admin_receipt(interaction.guild, interaction.user, jogador, "Setar estilo", f"Estilo atribuído: {chosen['name']} ({chosen['rarity']})")
     response = f"🏎️ Estilo **{chosen['name']}** setado para {jogador.mention}."
     if role: response += f" Cargo: {role.mention}."
+    if warning: response += f"\n⚠️ {warning}"
+    await interaction.response.send_message(response, ephemeral=True)
+
+@bot.tree.command(name="setar_estilo_cargo", description="Define o estilo de um jogador selecionando o cargo (admin)")
+@app_commands.describe(jogador="Pessoa que receberá o estilo", cargo="Cargo correspondente ao estilo")
+@app_commands.checks.has_permissions(administrator=True)
+async def setar_estilo_cargo(interaction: discord.Interaction, jogador: discord.Member, cargo: discord.Role):
+    style_name = next(
+        (name for name, role_id in PILOT_ROLE_IDS.items() if role_id and int(role_id) == cargo.id),
+        None,
+    )
+    if not style_name:
+        return await interaction.response.send_message(
+            "Esse cargo não está associado a nenhum estilo em PILOT_ROLE_IDS.",
+            ephemeral=True,
+        )
+    chosen = next((item for item in PILOT_STYLES if item["name"] == style_name), None)
+    if not chosen:
+        return await interaction.response.send_message(
+            "O cargo foi reconhecido, mas o estilo correspondente não existe no catálogo atual.",
+            ephemeral=True,
+        )
+    profile = gacha_profile(jogador.id)
+    role, warning = await equip_style_consistently(interaction.guild, jogador, profile, dict(chosen))
+    await send_admin_receipt(interaction.guild, interaction.user, jogador, "Setar estilo pelo cargo", f"Estilo atribuído: {chosen['name']} ({chosen['rarity']})")
+    response = f"🏎️ Estilo **{chosen['name']}** setado para {jogador.mention} pelo cargo {cargo.mention}."
     if warning: response += f"\n⚠️ {warning}"
     await interaction.response.send_message(response, ephemeral=True)
 
