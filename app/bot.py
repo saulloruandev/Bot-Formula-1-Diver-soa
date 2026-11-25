@@ -63,12 +63,35 @@ TIRES = {
 }
 
 SKILL_FIELDS = (
+    ("tyre_management", "Gerenciamento de pneus", "🛞"),
     ("curves", "Curvas", "🌀"),
-    ("straights", "Retas", "🏎️"),
-    ("braking", "Frenagem", "🛑"),
-    ("acceleration", "Aceleração", "⚡"),
+    ("speed", "Velocidade", "🏎️"),
+    ("qualifying", "Classificação", "⏱️"),
+    ("engine", "Motor", "⚙️"),
     ("control", "Controle", "🎯"),
 )
+STYLE_SKILL_MAP = {
+    "tyre_management": None,
+    "curves": "curves",
+    "speed": "straights",
+    "qualifying": "braking",
+    "engine": "acceleration",
+    "control": "control",
+}
+ABILITY_CATALOG = {
+    "Ultrapassador Nato": "Bônus pequeno em tentativas de ultrapassagem.",
+    "Largada Explosiva": "Pequena vantagem na primeira volta.",
+    "Especialista em DRS": "Bônus leve de velocidade em retas ao atacar.",
+    "Defensor Nato": "Reduz um pouco a chance de ser ultrapassado.",
+    "Mãos de Cirurgião": "Reduz discretamente o risco de erro.",
+    "Sangue Frio": "Reduz o impacto de decisões agressivas.",
+    "Mestre dos Pneus": "Reduz levemente o desgaste dos pneus.",
+    "Pit Stop Perfeito": "Pequena recuperação de desgaste no início.",
+    "Rei da Chuva": "Reduz a penalidade em condições de chuva.",
+    "Motorista de Qualificação": "Pequeno bônus na classificação.",
+    "Recuperação Rápida": "Recupera um pouco mais de energia.",
+    "Última Volta": "Pequeno bônus de ritmo na última volta.",
+}
 DRIVING_MODES = {
     "normal": {"label": "Normal", "pace": 0.0, "risk": 0.0, "defense": 0.0, "attack": 0.0},
     "aggressive": {"label": "Agressivo", "pace": -0.22, "risk": 0.12, "defense": -0.04, "attack": 0.16},
@@ -89,17 +112,24 @@ class Driver:
     race_name: Optional[str] = None
     team_name: Optional[str] = None
     favorite_tire: Optional[str] = None
+    tyre_management: int = 0
     curves: int = 0
+    speed: int = 0
+    qualifying: int = 0
+    engine: int = 0
+    control: int = 0
+    # Espelhos para manter compatibilidade com a lógica de corrida existente.
     straights: int = 0
     braking: int = 0
     acceleration: int = 0
-    control: int = 0
+    ability: Optional[str] = None
     tire: Optional[str] = None
     ready: bool = False
     qualifying_time: Optional[float] = None
     grid_position: Optional[int] = None
     total_time: float = 0.0
     last_lap_time: float = 0.0
+    best_lap_time: Optional[float] = None
     tire_wear: float = 0.0  # 0-100
     energy: float = 100.0  # energia de jogo, 0-100
     distance: float = 0.0  # progresso em unidades de segmento
@@ -122,7 +152,7 @@ class Driver:
 
     @property
     def total_skills(self):
-        return self.curves + self.straights + self.braking + self.acceleration + self.control
+        return sum(getattr(self, key) for key, _, _ in SKILL_FIELDS)
 
     @property
     def skills_complete(self):
@@ -130,7 +160,7 @@ class Driver:
 
     @property
     def skill_summary(self):
-        return f"Curvas {self.curves} | Retas {self.straights} | Frenagem {self.braking} | Aceleração {self.acceleration} | Controle {self.control}"
+        return " | ".join(f"{label}: {getattr(self, key)}" for key, label, _ in SKILL_FIELDS)
 
     @property
     def lobby_status(self):
@@ -288,6 +318,42 @@ def load_profiles():
     return {}
 
 USER_PROFILES = load_profiles()
+
+def migrate_skill_distribution(skills):
+    """Migra cinco atributos antigos para seis, preservando a proporção total."""
+    skills = skills if isinstance(skills, dict) else {}
+    if "speed" not in skills and "straights" in skills:
+        values = {
+            "tyre_management": 0,
+            "curves": max(0, int(skills.get("curves", 0))),
+            "speed": max(0, int(skills.get("straights", 0))),
+            "qualifying": max(0, int(skills.get("braking", 0))),
+            "engine": max(0, int(skills.get("acceleration", 0))),
+            "control": max(0, int(skills.get("control", 0))),
+        }
+    else:
+        values = {key: max(0, int(skills.get(key, 0))) for key, _, _ in SKILL_FIELDS}
+    total = sum(values.values())
+    if total <= 0:
+        return {"tyre_management": 1, "curves": 2, "speed": 2, "qualifying": 1, "engine": 2, "control": 2}
+    if total != SKILL_POINTS:
+        exact = {key: value * SKILL_POINTS / total for key, value in values.items()}
+        scaled = {key: int(value) for key, value in exact.items()}
+        remainder = SKILL_POINTS - sum(scaled.values())
+        for key in sorted(exact, key=lambda k: exact[k] - scaled[k], reverse=True)[:remainder]:
+            scaled[key] += 1
+        values = scaled
+    return values
+
+for _profile in USER_PROFILES.values():
+    if isinstance(_profile, dict):
+        _profile["skills"] = migrate_skill_distribution(_profile.get("skills"))
+        _profile.setdefault("ability", random.choice(list(ABILITY_CATALOG)))
+        _profile.setdefault("skills_locked", True)
+try:
+    PROFILE_FILE.write_text(json.dumps(USER_PROFILES, ensure_ascii=False, indent=2), encoding="utf-8")
+except OSError:
+    pass
 
 # Gacha de estilos: loja apenas visual; confirmação de compra não consulta a Loritta.
 RARITY_DATA = {
@@ -890,31 +956,22 @@ async def equip_style_consistently(guild, member, profile, style):
     return role, warning
 
 def gacha_profile(user_id: int):
+    is_new_profile = str(user_id) not in USER_PROFILES
     profile = USER_PROFILES.setdefault(str(user_id), {
         "name": "", "age": None, "team": "", "photo_url": "",
         "skills": dict(PROFILE_PRESETS["balanced"]["skills"]),
         "spins": 0, "style_collection": [], "equipped_style": None,
         "skip_roll_gamepass": False, "skip_roll_active": False,
+        "skills_locked": False, "ability": random.choice(list(ABILITY_CATALOG)),
     })
     profile.setdefault("age", None); profile.setdefault("team", ""); profile.setdefault("photo_url", "")
     profile.setdefault("spins", 0); profile.setdefault("style_collection", [])
     profile.setdefault("equipped_style", None); profile.setdefault("skip_roll_gamepass", False)
     profile.setdefault("skip_roll_active", False)
-    skills = profile.get("skills") or dict(PROFILE_PRESETS["balanced"]["skills"])
-    skills = {key: max(0, int(skills.get(key, 0))) for key, label, emoji in SKILL_FIELDS}
-    total = sum(skills.values())
-    if total != SKILL_POINTS:
-        # normalize allocation to 10 while keeping relative distribution
-        if total <= 0:
-            skills = dict(PROFILE_PRESETS["balanced"]["skills"])
-        else:
-            exact = {key: skills[key] * SKILL_POINTS / total for key in skills}
-            normalized = {key: int(exact[key]) for key in exact}
-            remainder = SKILL_POINTS - sum(normalized.values())
-            for key in sorted(exact, key=lambda k: exact[k] - normalized[k], reverse=True)[:remainder]:
-                normalized[key] += 1
-            skills = normalized
-    profile["skills"] = skills
+    profile["skills"] = migrate_skill_distribution(profile.get("skills"))
+    profile.setdefault("ability", random.choice(list(ABILITY_CATALOG)))
+    if is_new_profile:
+        save_profiles()
     return profile
 
 def roll_style():
@@ -1030,9 +1087,10 @@ class SkillSelect(discord.ui.Select):
 
 class SkillView(discord.ui.View):
     def __init__(self, race, user_id):
-        super().__init__(timeout=180)
-        for attribute, label, emoji in SKILL_FIELDS:
-            self.add_item(SkillSelect(race, user_id, attribute, label, emoji))
+        super().__init__(timeout=60)
+        self.race = race
+        self.user_id = user_id
+        self.add_item(discord.ui.Button(label="Distribuir pelo perfil", style=discord.ButtonStyle.primary, disabled=True))
 
 
 class TireSelect(discord.ui.Select):
@@ -1089,9 +1147,12 @@ class LobbyView(discord.ui.View):
             bonuses = (style or {}).get("skills", {})
             driver = Driver(
                 user=interaction.user, race_name=profile.get("name") or interaction.user.display_name,
-                curves=int(saved_skills.get("curves", 0)), straights=int(saved_skills.get("straights", 0)),
-                braking=int(saved_skills.get("braking", 0)), acceleration=int(saved_skills.get("acceleration", 0)),
+                tyre_management=int(saved_skills.get("tyre_management", 0)),
+                curves=int(saved_skills.get("curves", 0)), speed=int(saved_skills.get("speed", 0)),
+                qualifying=int(saved_skills.get("qualifying", 0)), engine=int(saved_skills.get("engine", 0)),
                 control=int(saved_skills.get("control", 0)),
+                straights=int(saved_skills.get("speed", 0)), braking=int(saved_skills.get("qualifying", 0)),
+                acceleration=int(saved_skills.get("engine", 0)), ability=profile.get("ability"),
                 style_name=equipped, style_curves=int(bonuses.get("curves",0)),
                 style_straights=int(bonuses.get("straights",0)), style_braking=int(bonuses.get("braking",0)),
                 style_acceleration=int(bonuses.get("acceleration",0)), style_control=int(bonuses.get("control",0)),
@@ -1103,7 +1164,11 @@ class LobbyView(discord.ui.View):
     async def configure(self, interaction, button):
         if not self.active(interaction) or interaction.user.id not in self.race.drivers:
             return await interaction.response.send_message("Entre no lobby antes.", ephemeral=True)
-        await interaction.response.send_message(f"Distribua exatamente {SKILL_POINTS} pontos.", view=SkillView(self.race, interaction.user.id), ephemeral=True)
+        profile = gacha_profile(interaction.user.id)
+        if profile.get("skills_locked"):
+            return await interaction.response.send_message("Seus atributos já foram definidos e estão bloqueados.", ephemeral=True)
+        modal = ProfileSkillsModal(interaction.user.id)
+        await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Escolher pneus", emoji="🛞", style=discord.ButtonStyle.secondary, row=0)
     async def tires(self, interaction, button):
@@ -1155,12 +1220,15 @@ def calculate_qualifying_time(driver, race):
     rain = WEATHER[race.weather_name]["rain"]
     weighted = (
         driver.effective_skill("curves") * circuit["corners"] + driver.effective_skill("straights") * circuit["straights"]
-        + driver.effective_skill("braking") * circuit["braking"] + driver.effective_skill("acceleration") * circuit["acceleration"]
+        + driver.effective_skill("acceleration") * circuit["acceleration"]
         + driver.effective_skill("control") * circuit["control"]
+        + (driver.qualifying + driver.style_braking) * 0.08
     )
     skill_delta = weighted - 4.0
     tire_delta = (tire_weather_multiplier(driver.tire, rain) - 1.0) * 2.8
     weather_penalty = rain * 1.8
+    if driver.ability == "Motorista de Qualificação":
+        skill_delta += 0.20
     random_delta = random.uniform(-0.22, 0.22)
     return max(60.0, circuit["base_lap"] - skill_delta * 0.65 + tire_delta + weather_penalty + random_delta)
 
@@ -1262,7 +1330,7 @@ def skill_segment_bonus(driver, segment):
         # Reta e aceleração predominam; reta impacta a velocidade média.
         return driver.effective_skill("straights") * 0.055 + driver.effective_skill("acceleration") * 0.035
     # Curva, frenagem e controle fazem diferença na zona técnica.
-    return driver.effective_skill("curves") * 0.055 + driver.effective_skill("braking") * 0.035 + driver.effective_skill("control") * 0.045
+    return driver.effective_skill("curves") * 0.065 + driver.effective_skill("control") * 0.045
 
 
 def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opponent=None):
@@ -1272,10 +1340,16 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     base = segment_base_time(segment, circuit)
 
     skill_bonus = skill_segment_bonus(driver, segment)
+    if driver.ability == "Largada Explosiva" and race.current_lap == 1:
+        skill_bonus += base * 0.006
+    if driver.ability == "Última Volta" and race.current_lap == race.total_laps:
+        skill_bonus += base * 0.006
     tire_mult = tire_weather_multiplier(driver.tire, rain)
     tire_condition = max(0.60, 1.0 - driver.tire_wear / 160.0)
     tire_loss = max(0.0, 1.0 - tire_mult) * (base * 0.12)
     weather_loss = rain * (base * 0.08)
+    if driver.ability == "Rei da Chuva":
+        weather_loss *= 0.90
     mode_adjustment = mode["pace"]
 
     # Energia de jogo substitui um uso simplificado da gestão elétrica:
@@ -1316,6 +1390,10 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     risk += (driver.tire_wear / 100) * 0.20 + (driver.car_damage / 100) * 0.12
     risk += curve_intensity * max(0, 5 - driver.effective_skill("curves")) * 0.012
     risk += curve_intensity * max(0, 5 - driver.effective_skill("control")) * 0.014
+    if driver.ability == "Mãos de Cirurgião":
+        risk -= 0.008
+    if driver.ability == "Sangue Frio" and action["mode"] == "aggressive":
+        risk -= 0.006
     risk += max(0, -mode["pace"]) * 0.30  # agressividade/ação rápida
     risk = max(0.008, min(0.52, risk))
 
@@ -1341,6 +1419,11 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
 
     # Desgaste progride em cada segmento e afeta ritmo nos segmentos futuros.
     wear_increment = TIRES[driver.tire]["wear"] * (0.75 if segment == "reta" else 1.15)
+    wear_increment *= max(0.75, 1.0 - driver.effective_skill("tyre_management") * 0.025)
+    if driver.ability == "Mestre dos Pneus":
+        wear_increment *= 0.90
+    if driver.ability == "Pit Stop Perfeito" and race.current_lap == 1 and segment == "reta":
+        wear_increment *= 0.85
     if action["mode"] == "aggressive":
         wear_increment *= 1.20
     if action["mode"] == "safe":
@@ -1363,13 +1446,16 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
 
     # Recuperação pequena de energia em ritmo normal/seguro; manter tática como decisão.
     if not action["boost"] and not action["attack"]:
-        driver.energy = min(100.0, driver.energy + (2.0 if action["mode"] in ("normal", "safe") else 0.5))
+        recovery = 2.0 if action["mode"] in ("normal", "safe") else 0.5
+        if driver.ability == "Recuperação Rápida":
+            recovery += 0.5
+        driver.energy = min(100.0, driver.energy + recovery)
 
     return max(1.0, time), event
 
 
 def current_order(race):
-    return sorted(race.drivers.values(), key=lambda d: d.total_time)
+    return sorted(race.drivers.values(), key=lambda d: (d.retired, d.total_time))
 
 
 def standings_embed(race, lap, segment_label, events):
@@ -1528,6 +1614,33 @@ def reveal_decisions_embed(race, active, segment_title, events):
     return embed
 
 
+EVENT_ASSET_DIR = Path(__file__).parent / "assets" / "eventos"
+EVENT_IMAGE_RULES = {
+    "ultrapassagem": ("ultrapassagem.png", "↗️"),
+    "acidente": ("colisao.png", "💥"),
+    "derrapagem": ("rodada.png", "🌀"),
+    "ESTOURO DE PNEU": ("pneu.png", "🛞"),
+    "Abandono": ("abandono.png", "⛔"),
+    "Safety Car": ("safety_car.png", "🚨"),
+    "bandeira vermelha": ("bandeira_vermelha.png", "🟥"),
+    "volta mais rápida": ("volta_rapida.png", "⏱️"),
+}
+
+async def publish_important_event(race, message):
+    lower = message.lower()
+    for keyword, (filename, emoji) in EVENT_IMAGE_RULES.items():
+        if keyword.lower() in lower:
+            asset = EVENT_ASSET_DIR / filename
+            if asset.exists():
+                try:
+                    file = discord.File(asset, filename=filename)
+                    embed = discord.Embed(description=message, color=discord.Color.orange())
+                    embed.set_image(url=f"attachment://{filename}")
+                    await race.channel.send(content=emoji, embed=embed, file=file)
+                except discord.HTTPException:
+                    pass
+            return
+
 async def run_race(race):
     race.race_started = True
     # Ordem de grid de qualificação; tempo acumulado inicial usa o qualifying como
@@ -1540,6 +1653,7 @@ async def run_race(race):
     circuit = CIRCUITS[race.circuit_name]
     for lap in range(1, race.total_laps + 1):
         race.current_lap = lap
+        lap_start_times = {d.user.id: d.total_time for d in race.drivers.values()}
         lap_events = []
         for segment_index, segment in enumerate(circuit["segments"], 1):
             race.current_segment = segment_index
@@ -1582,7 +1696,9 @@ async def run_race(race):
                 driver.total_time += segment_time
                 driver.distance += 1.0
                 if event:
-                    lap_events.append(f"{driver_display_name(driver)}: {event}")
+                    event_message = f"{driver_display_name(driver)}: {event}"
+                    lap_events.append(event_message)
+                    await publish_important_event(race, event_message)
 
             # Resolver oportunidade de ultrapassagem, sem garantia automática:
             # se acionou ataque, está na janela de distância e o delta do segmento favoreceu,
@@ -1596,14 +1712,20 @@ async def run_race(race):
                 if action.get("attack") and prior_gap is not None and prior_gap <= OVERTAKE_DETECTION_SECONDS:
                     mode = DRIVING_MODES[action.get("mode", "normal")]
                     chance = 0.22 + driver.effective_skill("straights") * 0.025 + driver.effective_skill("acceleration") * 0.018 + driver.effective_skill("control") * 0.008
+                    if driver.ability in ("Ultrapassador Nato", "Especialista em DRS"):
+                        chance += 0.035
                     chance += mode["attack"]
                     chance -= ahead.control * 0.012
+                    if ahead.ability == "Defensor Nato":
+                        chance -= 0.035
                     chance = max(0.08, min(0.68, chance))
                     if random.random() < chance and driver.total_time > ahead.total_time:
                         # Overtake representa uma vantagem marginal no tempo do segmento,
                         # nunca uma posição concedida de forma garantida.
                         driver.total_time -= min(0.35, driver.total_time - ahead.total_time + 0.02)
-                        lap_events.append(f"↗️ {driver_display_name(driver)} completou uma ultrapassagem!")
+                        overtake_event = f"↗️ {driver_display_name(driver)} completou uma ultrapassagem!"
+                        lap_events.append(overtake_event)
+                        await publish_important_event(race, overtake_event)
                     else:
                         lap_events.append(f"🚥 {driver_display_name(driver)} tentou ultrapassar, mas não conseguiu.")
 
@@ -1615,12 +1737,18 @@ async def run_race(race):
         # Final da volta: contabilizar volta e checar chegada ao fim da volta 10.
         for driver in race.drivers.values():
             if not driver.finished:
-                driver.last_lap_time = sum([]) if False else driver.last_lap_time
+                driver.last_lap_time = driver.total_time - lap_start_times.get(driver.user.id, driver.total_time)
+                if not driver.retired and driver.last_lap_time > 0 and (driver.best_lap_time is None or driver.last_lap_time < driver.best_lap_time):
+                    driver.best_lap_time = driver.last_lap_time
                 if lap == race.total_laps:
                     driver.finished = True
         await asyncio.sleep(0.5)
 
     final_order = current_order(race)
+    fastest = min((d for d in final_order if d.best_lap_time is not None and not d.retired), key=lambda d: d.best_lap_time, default=None)
+    if fastest:
+        await publish_important_event(race, f"⏱️ Volta mais rápida: {driver_display_name(fastest)} — {format_time(fastest.best_lap_time)}")
+    await register_championship_result(race, final_order, fastest)
     podium = "\n".join(
         f"**P{position} — {driver_display_name(driver)}** | Tempo acumulado: `{format_time(driver.total_time)}` | "
         f"Pneu: {TIRES[driver.tire]['label']} | desgaste {driver.tire_wear:.0f}%"
@@ -1697,26 +1825,23 @@ class InventoryView(discord.ui.View):
         await interaction.response.send_message("⏸️ Gamepass Pular Giro desativada no seu perfil.", ephemeral=True)
 
 class ProfileSkillsModal(discord.ui.Modal, title="Distribuir 10 pontos pessoais"):
-    curves = discord.ui.TextInput(label="Curvas", max_length=2, required=True)
-    straights = discord.ui.TextInput(label="Retas", max_length=2, required=True)
-    braking = discord.ui.TextInput(label="Frenagem", max_length=2, required=True)
-    acceleration = discord.ui.TextInput(label="Aceleração", max_length=2, required=True)
-    control = discord.ui.TextInput(label="Controle", max_length=2, required=True)
+    distribution = discord.ui.TextInput(label="Pontos na ordem indicada", placeholder="1, 2, 2, 1, 2, 2", max_length=30, required=True)
     def __init__(self, owner_id):
-        super().__init__(); self.owner_id = owner_id
+        super().__init__(); self.owner_id = owner_id; self.source_message_id = None
         profile = gacha_profile(owner_id)
-        for key in ("curves", "straights", "braking", "acceleration", "control"):
-            getattr(self, key).default = str(profile["skills"].get(key, 0))
+        self.distribution.default = ", ".join(str(profile["skills"].get(key, 0)) for key, _, _ in SKILL_FIELDS)
     async def on_submit(self, interaction):
         if interaction.user.id != self.owner_id:
             return await interaction.response.send_message("Esse formulário não é seu.", ephemeral=True)
         try:
-            skills = {key: int(getattr(self, key).value) for key in ("curves", "straights", "braking", "acceleration", "control")}
+            values = [int(part.strip()) for part in self.distribution.value.split(",")]
+            if len(values) != 6: raise ValueError
+            skills = {field[0]: value for field, value in zip(SKILL_FIELDS, values)}
         except ValueError:
-            return await interaction.response.send_message("Informe números inteiros nos cinco atributos.", ephemeral=True)
-        if any(value < 0 for value in skills.values()) or sum(skills.values()) != SKILL_POINTS:
-            return await interaction.response.send_message(f"Os pontos devem ser inteiros não negativos e somar exatamente {SKILL_POINTS}.", ephemeral=True)
-        profile = gacha_profile(self.owner_id); profile["skills"] = skills; save_profiles()
+            return await interaction.response.send_message("Informe seis números inteiros separados por vírgula, na ordem exibida no perfil.", ephemeral=True)
+        if any(value < 0 or value > 10 for value in skills.values()) or sum(skills.values()) != SKILL_POINTS:
+            return await interaction.response.send_message(f"Os seis atributos devem ser inteiros entre 0 e 10 e somar {SKILL_POINTS}.", ephemeral=True)
+        profile = gacha_profile(self.owner_id); profile["skills"] = skills; profile["skills_locked"] = True; save_profiles()
         await interaction.response.send_message("✅ Distribuição pessoal salva.", ephemeral=True)
         await refresh_profile_message(interaction, self.source_message_id, profile)
 
@@ -1729,6 +1854,9 @@ class ProfileView(discord.ui.View):
     @discord.ui.button(label="Distribuir pontos", emoji="📊", style=discord.ButtonStyle.secondary, row=0)
     async def distribute(self, interaction, button):
         if interaction.user.id != self.owner_id: return await interaction.response.send_message("Esse botão não é seu.", ephemeral=True)
+        profile = gacha_profile(self.owner_id)
+        if profile.get("skills_locked"):
+            return await interaction.response.send_message("Seus atributos já foram definidos e não podem ser alterados.", ephemeral=True)
         modal=ProfileSkillsModal(self.owner_id); modal.source_message_id=interaction.message.id; await interaction.response.send_modal(modal)
     @discord.ui.button(label="Inventário",emoji="🎒",style=discord.ButtonStyle.secondary,row=0)
     async def inventory(self,interaction,button):
@@ -1775,7 +1903,7 @@ class RollLoadingView(discord.ui.View):
         super().__init__(timeout=180); self.owner_id=owner_id; self.style_data=style
     async def show_result(self, interaction, style):
         rarity=RARITY_DATA[style["rarity"]]
-        skills="\n".join(f"{emoji} **{label}:** {style['skills'][key]}" for key,label,emoji in SKILL_FIELDS)
+        skills="\n".join(f"{emoji} **{label}:** {style.get('skills', {}).get(STYLE_SKILL_MAP.get(key), 0) if STYLE_SKILL_MAP.get(key) else 0}" for key,label,emoji in SKILL_FIELDS)
         embed=discord.Embed(title=f"{rarity['emoji']} ESTILO SORTEADO: {style['name']}",description=f"**Raridade: {style['rarity'].upper()}**\n{style['trait']}\n\n{skills}\n\n**Pontos do estilo: {rarity['points']}**\n\nDeseja ficar com este estilo?",color=rarity["color"])
         embed.set_footer(text="Aceitar adiciona ao inventário. Recusar descarta o resultado; o giro já foi consumido.")
         resultview=RollConfirmView(self.owner_id, style)
@@ -1851,7 +1979,7 @@ async def pending_roll_command(ctx):
         return await ctx.send("Você não possui resultado pendente de confirmação.")
     style = pending.get("style", {})
     rarity = RARITY_DATA.get(style.get("rarity"), RARITY_DATA["Comum"])
-    skills = "\n".join(f"{emoji} **{label}:** {style.get('skills', {}).get(key, 0)}" for key, label, emoji in SKILL_FIELDS)
+    skills = "\n".join(f"{emoji} **{label}:** {style.get('skills', {}).get(STYLE_SKILL_MAP.get(key), 0) if STYLE_SKILL_MAP.get(key) else 0}" for key, label, emoji in SKILL_FIELDS)
     embed = discord.Embed(title=f"{rarity['emoji']} Resultado pendente: {style.get('name', 'Estilo desconhecido')}", description=f"**Raridade:** {style.get('rarity')}\n{style.get('trait', '')}\n\n{skills}\n\n**Pontos do estilo:** {rarity['points']}\nDeseja aceitar ou recusar?", color=rarity["color"])
     await ctx.send(embed=embed, view=RollConfirmView(ctx.author.id, style))
 
@@ -1986,6 +2114,147 @@ async def equipar_estilo(interaction: discord.Interaction,estilo: str):
 
 
 
+# Campeonato persistente (uma temporada ativa por servidor).
+CHAMPIONSHIP_FILE = Path(__file__).with_name("campeonato.json")
+CHAMPIONSHIP_POINTS = {1: 10, 2: 7, 3: 5, 4: 3, 5: 1}
+
+def load_championship():
+    try:
+        if CHAMPIONSHIP_FILE.exists():
+            data = json.loads(CHAMPIONSHIP_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {"seasons": {}, "active": {}}
+
+CHAMPIONSHIP = load_championship()
+
+def save_championship():
+    CHAMPIONSHIP_FILE.write_text(json.dumps(CHAMPIONSHIP, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def season_for(guild_id):
+    season_id = CHAMPIONSHIP.get("active", {}).get(str(guild_id))
+    return CHAMPIONSHIP.get("seasons", {}).get(season_id) if season_id else None
+
+async def register_championship_result(race, order, fastest):
+    season = season_for(race.guild_id)
+    if not season:
+        return
+    race_id = f"{race.guild_id}-{int(__import__('time').time())}-{race.channel_id}"
+    if any(item.get("race_id") == race_id for item in season.get("races", [])):
+        return
+    results = []
+    for position, driver in enumerate(order, 1):
+        results.append({
+            "user_id": str(driver.user.id),
+            "name": driver_display_name(driver),
+            "position": position,
+            "retired": bool(driver.retired),
+            "fastest_lap": bool(fastest and fastest.user.id == driver.user.id),
+            "lap_time": driver.best_lap_time or driver.last_lap_time,
+        })
+    season.setdefault("races", []).append({
+        "race_id": race_id, "circuit": race.circuit_name,
+        "date": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+        "results": results,
+    })
+    save_championship()
+
+def championship_table(season):
+    table = {}
+    for race_data in season.get("races", []):
+        results = race_data.get("results", [])
+        for result in results:
+            uid = result["user_id"]
+            row = table.setdefault(uid, {"user_id": uid, "name": result["name"], "points": 0, "wins": 0, "seconds": 0, "thirds": 0, "fastest": 0, "races": 0})
+            row["races"] += 1
+            pos = result["position"]
+            if not result.get("retired"):
+                row["points"] += CHAMPIONSHIP_POINTS.get(pos, 0)
+                row["wins"] += pos == 1
+                row["seconds"] += pos == 2
+                row["thirds"] += pos == 3
+                if result.get("fastest_lap") and pos <= 3:
+                    row["points"] += 1
+                    row["fastest"] += 1
+    return sorted(table.values(), key=lambda x: (x["points"], x["wins"], x["seconds"], x["thirds"], x["fastest"]), reverse=True)
+
+@bot.command(name="campeonato")
+async def championship_command(ctx):
+    season = season_for(ctx.guild.id if ctx.guild else 0)
+    if not season:
+        return await ctx.send("Não existe temporada ativa. Um administrador pode usar `!iniciartemporada nome`.")
+    rows = championship_table(season)
+    text_rows = [f"**P{i} — {r['name']}** • {r['points']} pts | {r['wins']}V {r['seconds']}S {r['thirds']}T | {r['fastest']} VR" for i, r in enumerate(rows, 1)]
+    embed = discord.Embed(title=f"🏆 Campeonato — {season['name']}", description="\n".join(text_rows) or "Nenhuma corrida registrada.", color=discord.Color.gold())
+    embed.set_footer(text=f"Etapas concluídas: {len(season.get('races', []))}")
+    await ctx.send(embed=embed)
+
+@bot.command(name="ranking")
+async def ranking_command(ctx):
+    await championship_command(ctx)
+
+@bot.command(name="temporada")
+async def season_command(ctx):
+    season = season_for(ctx.guild.id if ctx.guild else 0)
+    if not season:
+        return await ctx.send("Nenhuma temporada ativa.")
+    await ctx.send(f"🏁 **{season['name']}** — {len(season.get('races', []))} etapa(s) registrada(s).")
+
+@bot.command(name="resultado")
+async def result_command(ctx):
+    season = season_for(ctx.guild.id if ctx.guild else 0)
+    if not season or not season.get("races"):
+        return await ctx.send("Ainda não há resultados registrados.")
+    latest = season["races"][-1]
+    lines = [f"**P{r['position']}** {r['name']}" + (" — ⛔ Abandonou" if r.get("retired") else "") + (" • 🟣 Volta mais rápida" if r.get("fastest_lap") else "") for r in latest["results"]]
+    await ctx.send(embed=discord.Embed(title=f"Resultado — {latest['circuit']}", description="\n".join(lines), color=discord.Color.gold()))
+
+@bot.command(name="estatisticas")
+async def statistics_command(ctx):
+    season = season_for(ctx.guild.id if ctx.guild else 0)
+    if not season:
+        return await ctx.send("Nenhuma temporada ativa.")
+    rows = championship_table(season)
+    if not rows:
+        return await ctx.send("Ainda não há estatísticas.")
+    r = next((x for x in rows if x["user_id"] == str(ctx.author.id)), None)
+    if not r:
+        return await ctx.send("Você ainda não participou de uma corrida desta temporada.")
+    await ctx.send(f"📊 **{r['name']}** — {r['points']} pontos, {r['wins']} vitória(s), {r['fastest']} volta(s) mais rápida(s), {r['races']} corrida(s).")
+
+@bot.command(name="iniciartemporada")
+@commands.has_permissions(administrator=True)
+async def start_season_command(ctx, *, name="Temporada"):
+    gid = str(ctx.guild.id)
+    season_id = f"{gid}-{int(__import__('time').time())}"
+    CHAMPIONSHIP["seasons"][season_id] = {"name": name, "guild_id": gid, "races": []}
+    CHAMPIONSHIP["active"][gid] = season_id
+    save_championship()
+    await ctx.send(f"🏆 Temporada **{name}** iniciada!")
+
+@bot.command(name="finalizartemporada")
+@commands.has_permissions(administrator=True)
+async def finish_season_command(ctx):
+    gid = str(ctx.guild.id)
+    if gid not in CHAMPIONSHIP.get("active", {}):
+        return await ctx.send("Não existe temporada ativa.")
+    CHAMPIONSHIP["active"].pop(gid, None)
+    save_championship()
+    await ctx.send("🏁 Temporada finalizada. O histórico foi preservado.")
+
+@bot.command(name="resetcampeonato")
+@commands.has_permissions(administrator=True)
+async def reset_championship_command(ctx):
+    gid = str(ctx.guild.id)
+    season = season_for(ctx.guild.id)
+    if not season:
+        return await ctx.send("Não existe temporada ativa.")
+    season["races"] = []
+    save_championship()
+    await ctx.send("♻️ Resultados da temporada ativa foram reiniciados.")
+
 @bot.command(name="comandos")
 async def commands_list(ctx):
     embed = discord.Embed(title="📜 Comandos do F1 Discord Racing", color=discord.Color.blue())
@@ -1993,6 +2262,8 @@ async def commands_list(ctx):
         "`!f1` — cria um lobby; o host usa os botões do próprio painel para configurar, classificar e iniciar.\n"
         "`!perfil` — configura nome, idade, equipe, foto, estilo e inventário.\n`!roll-estilo` — roleta gacha de estilos de pilotos F1.\n`!roll-pendente` — recupera resultado aguardando confirmação.\n`!loja` — loja visual de giros (sonhos da Loritta; confirmação manual).\n`!colecao-estilos` — mostra estilos obtidos.\n`/adicionar_giros`, `/deletar_giros`, `/setar_estilo` e `/gamepass` — administração de giros/estilos.\n"
         "`!ajuda` — guia de funcionamento e explicação das estratégias.\n"
+        "`!campeonato` / `!ranking` / `!estatisticas` / `!temporada` / `!resultado` — consultar campeonato, etapa e desempenho.\n"
+        "`!iniciartemporada` / `!finalizartemporada` / `!resetcampeonato` — gestão de temporada (administradores).\n"
         "`!comandos` — exibe esta lista.\n"
         "`!f1status` — mostra estado do lobby/corrida.\n"
         "`!f1cancel` — cancela lobby/corrida (somente host).\n\n"
@@ -2006,7 +2277,7 @@ async def help_f1(ctx):
     embed = discord.Embed(title="📘 Guia de corrida — F1 Discord Racing", color=discord.Color.green())
     embed.description = (
         "**1) Criar e entrar:** use `!f1`. Pilotos clicam Entrar na corrida, configuram o carro e os pneus, e marcam Estou pronto.\n"
-        "**2) Perfil/crachá:** `!perfil` mostra estilo equipado, cargo, dados pessoais e botões Configurar/Inventário.\n**3) Gacha:** `!roll-estilo` permite gastar giros para obter estilos de pilotos. `!loja` mostra pacotes em sonhos; a compra é confirmada manualmente e o bot não desconta sonhos. `!colecao-estilos` lista os estilos recebidos. Os estilos têm raridades e pontos extras próprios. Nome aparece na corrida; equipe e pneu favorito são visuais, sem impacto na simulação. Perfil salvo é carregado no próximo lobby; os pontos ainda podem ser ajustados.\n"
+        "**2) Perfil/crachá:** `!perfil` mostra estilo equipado, cargo, dados pessoais e botões Configurar/Inventário.\n**3) Gacha:** `!roll-estilo` permite gastar giros para obter estilos de pilotos. `!loja` mostra pacotes em sonhos; a compra é confirmada manualmente e o bot não desconta sonhos. `!colecao-estilos` lista os estilos recebidos. Os estilos têm raridades e pontos extras próprios. Nome aparece na corrida; equipe e pneu favorito são visuais, sem impacto na simulação. Perfil salvo é carregado no próximo lobby; os pontos pessoais só podem ser distribuídos uma vez e depois ficam bloqueados.\n"
         "**4) Classificação:** o host clica Iniciar classificação no painel do lobby. A classificação usa habilidades, pneus, clima e uma variação aleatória moderada para definir o grid.\n"
         "**5) Corrida:** o host clica Iniciar corrida no painel de classificação. Cada volta é dividida em quatro trechos de reta/curva. Em cada trecho, todos escolhem pelos mesmos botões públicos; a escolha fica oculta até todos confirmarem. O prazo é 45 segundos (ou o valor configurado); quem não decidir recebe Seguro.\n\n"
         "**AÇÕES DE PILOTAGEM**\n"
@@ -2017,10 +2288,12 @@ async def help_f1(ctx):
         "↗️ **Overtake Mode:** seleciona uma tentativa de ultrapassagem. Só é elegível se houver um carro imediatamente à frente dentro da janela de 1,0 segundo e energia suficiente (12). Gasta energia; chance depende da diferença, atributos e fatores aleatórios. Não garante ultrapassar. Se estiver fora da janela/sem energia, a tentativa aplica penalidade.\n"
         "⚡ **Boost Mode:** usa 15 de energia para ganhar ritmo no trecho. Se não houver energia suficiente, não ativa e a simulação aplica uma penalidade leve.\n\n"
         "**CARRO, PNEUS E CONDIÇÕES**\n"
-        "• Os 10 pontos são distribuídos entre Curvas, Retas, Frenagem, Aceleração e Controle. Retas/Aceleração ajudam nas retas; Curvas/Frenagem/Controle ajudam nos trechos técnicos e reduzem riscos.\n"
+        "• Gerenciamento de pneus reduz desgaste; Curvas melhora trechos técnicos; Velocidade favorece retas e ultrapassagens; Classificação melhora o grid; Motor ajuda na aceleração; Controle reduz riscos. Os 10 pontos pessoais ficam bloqueados após a primeira distribuição.\n"
         "• Soft: rápido, mas desgasta muito. Medium: equilíbrio. Hard: menos aderência, maior durabilidade. Intermediate: indicado para pista úmida. Wet: melhor para chuva forte, mas fraco em pista seca. Pneus inadequados prejudicam o ritmo.\n"
         "• O desgaste reduz a condição do pneu ao longo dos segmentos. A energia é limitada e pode ser recuperada um pouco com Normal/Seguro. Clima chuvoso aumenta a perda de ritmo e o risco.\n"
-        "• Erros e derrapagens são eventos probabilísticos; Controle, Frenagem, modo escolhido, chuva e desgaste influenciam o risco.\n\n"
+        "• Erros e derrapagens são eventos probabilísticos; Controle, modo escolhido, chuva e desgaste influenciam o risco.\n"
+        "• Habilidades especiais são sorteadas uma única vez por piloto e funcionam separadamente dos atributos e dos estilos do gacha.\n"
+        "• Campeonato: 1º 10 pts, 2º 7, 3º 5, 4º 3, 5º 1; volta mais rápida vale +1 se o piloto terminar no top 3. Abandono não pontua.\n\n"
         "**Botões de gestão:** Configurar corrida permite ao host escolher voltas, circuito, clima e prazo de decisão. Iniciar classificação e Iniciar corrida avançam o fluxo sem comandos separados."
     )
     embed.set_footer(text="As mecânicas são uma simulação simplificada e não reproduzem integralmente as regras oficiais da F1.")
@@ -2040,10 +2313,12 @@ def build_profile_embed(profile, member, guild):
     bonuses=style.get("skills", {}) if style else {}
     desc += "\n**📊 Atributos pessoais (10 pontos)**\n"
     desc += " • ".join(f"{label}: {personal.get(key,0)}" for key,label,emoji in SKILL_FIELDS)
+    desc += f"\n\n**✨ Habilidade especial:** {profile.get('ability') or 'Não definida'}\n_{ABILITY_CATALOG.get(profile.get('ability'), 'Habilidade passiva sorteada uma única vez.')}_"
     desc += "\n\n**🏆 Bônus do estilo**\n"
-    desc += " • ".join(f"{label}: +{bonuses.get(key,0)}" for key,label,emoji in SKILL_FIELDS) if style else "Nenhum estilo equipado."
+    style_values = {key: int(bonuses.get(source, 0)) if source else 0 for key, source in STYLE_SKILL_MAP.items()}
+    desc += " • ".join(f"{label}: +{style_values.get(key,0)}" for key,label,emoji in SKILL_FIELDS) if style else "Nenhum estilo equipado."
     desc += "\n\n**⚙️ Atributos finais (pessoal + estilo)**\n"
-    desc += " • ".join(f"{label}: {int(personal.get(key,0))+int(bonuses.get(key,0))}" for key,label,emoji in SKILL_FIELDS)
+    desc += " • ".join(f"{label}: {int(personal.get(key,0))+style_values.get(key,0)}" for key,label,emoji in SKILL_FIELDS)
     embed=discord.Embed(title="🏎️ Perfil do piloto",description=desc,color=discord.Color.orange())
     if profile.get("photo_url"): embed.set_image(url=profile["photo_url"])
     return embed
