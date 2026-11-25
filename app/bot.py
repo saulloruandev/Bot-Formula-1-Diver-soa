@@ -150,6 +150,7 @@ class Driver:
     car_damage: float = 0.0  # 0-100, cresce durante a corrida
     retired: bool = False
     pit_stops: int = 0
+    last_pit_lap: int = 0
 
     def effective_skill(self, attribute):
         return getattr(self, attribute) + getattr(self, f"style_{attribute}", 0)
@@ -1320,6 +1321,8 @@ class RaceDecisionView(discord.ui.View):
             return await interaction.response.send_message("DRS indisponível: precisa estar até 1,0s do carro à frente em uma reta.", ephemeral=True)
         if (boost or pit or attack) and race.current_segment_type != "reta":
             return await interaction.response.send_message("Essa ação só está disponível em uma reta.", ephemeral=True)
+        if pit and driver.last_pit_lap == race.current_lap:
+            return await interaction.response.send_message("Você já fez um pit stop nesta volta.", ephemeral=True)
         async with race.decision_lock:
             if driver.chosen_action is not None:
                 return await interaction.response.send_message("Você já confirmou sua decisão neste trecho.", ephemeral=True)
@@ -1366,6 +1369,7 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
         driver.tire_wear = 0.0
         driver.car_damage = max(0.0, driver.car_damage - 12.0)
         driver.pit_stops += 1
+        driver.last_pit_lap = race.current_lap
         pit_penalty = 18.0
         event = f"🛠️ PIT STOP: {driver_display_name(driver)} trocou {TIRES[old_tire]['label'] if old_tire in TIRES else 'pneus'} por {TIRES[chosen_tire]['label']} e reparou parte do dano."
     if driver.ability == "Largada Explosiva" and race.current_lap == 1:
