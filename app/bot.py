@@ -63,12 +63,27 @@ TIRES = {
 }
 
 SKILL_FIELDS = (
+    ("tyre_management", "Gerenciamento de pneus", "🛞"),
     ("curves", "Curvas", "🌀"),
-    ("straights", "Retas", "🏎️"),
-    ("braking", "Frenagem", "🛑"),
-    ("acceleration", "Aceleração", "⚡"),
+    ("speed", "Velocidade", "🏎️"),
+    ("qualifying", "Classificação", "⏱️"),
+    ("engine", "Motor", "⚙️"),
     ("control", "Controle", "🎯"),
 )
+ABILITY_CATALOG = {
+    "Ultrapassador Nato": "Bônus pequeno em tentativas de ultrapassagem.",
+    "Largada Explosiva": "Pequena vantagem na primeira volta.",
+    "Especialista em DRS": "Bônus leve de velocidade em retas ao atacar.",
+    "Defensor Nato": "Reduz um pouco a chance de ser ultrapassado.",
+    "Mãos de Cirurgião": "Reduz discretamente o risco de erro.",
+    "Sangue Frio": "Reduz o impacto de decisões agressivas.",
+    "Mestre dos Pneus": "Reduz levemente o desgaste dos pneus.",
+    "Pit Stop Perfeito": "Pequena recuperação de desgaste no início.",
+    "Rei da Chuva": "Reduz a penalidade em condições de chuva.",
+    "Motorista de Qualificação": "Pequeno bônus na classificação.",
+    "Recuperação Rápida": "Recupera um pouco mais de energia.",
+    "Última Volta": "Pequeno bônus de ritmo na última volta.",
+}
 DRIVING_MODES = {
     "normal": {"label": "Normal", "pace": 0.0, "risk": 0.0, "defense": 0.0, "attack": 0.0},
     "aggressive": {"label": "Agressivo", "pace": -0.22, "risk": 0.12, "defense": -0.04, "attack": 0.16},
@@ -89,11 +104,17 @@ class Driver:
     race_name: Optional[str] = None
     team_name: Optional[str] = None
     favorite_tire: Optional[str] = None
+    tyre_management: int = 0
     curves: int = 0
+    speed: int = 0
+    qualifying: int = 0
+    engine: int = 0
+    control: int = 0
+    # Espelhos para manter compatibilidade com a lógica de corrida existente.
     straights: int = 0
     braking: int = 0
     acceleration: int = 0
-    control: int = 0
+    ability: Optional[str] = None
     tire: Optional[str] = None
     ready: bool = False
     qualifying_time: Optional[float] = None
@@ -122,7 +143,7 @@ class Driver:
 
     @property
     def total_skills(self):
-        return self.curves + self.straights + self.braking + self.acceleration + self.control
+        return sum(getattr(self, key) for key, _, _ in SKILL_FIELDS)
 
     @property
     def skills_complete(self):
@@ -130,7 +151,7 @@ class Driver:
 
     @property
     def skill_summary(self):
-        return f"Curvas {self.curves} | Retas {self.straights} | Frenagem {self.braking} | Aceleração {self.acceleration} | Controle {self.control}"
+        return " | ".join(f"{label}: {getattr(self, key)}" for key, label, _ in SKILL_FIELDS)
 
     @property
     def lobby_status(self):
@@ -288,6 +309,38 @@ def load_profiles():
     return {}
 
 USER_PROFILES = load_profiles()
+
+def migrate_skill_distribution(skills):
+    """Migra cinco atributos antigos para seis, preservando a proporção total."""
+    skills = skills if isinstance(skills, dict) else {}
+    if "speed" not in skills and "straights" in skills:
+        values = {
+            "tyre_management": 0,
+            "curves": max(0, int(skills.get("curves", 0))),
+            "speed": max(0, int(skills.get("straights", 0))),
+            "qualifying": max(0, int(skills.get("braking", 0))),
+            "engine": max(0, int(skills.get("acceleration", 0))),
+            "control": max(0, int(skills.get("control", 0))),
+        }
+    else:
+        values = {key: max(0, int(skills.get(key, 0))) for key, _, _ in SKILL_FIELDS}
+    total = sum(values.values())
+    if total <= 0:
+        return {"tyre_management": 1, "curves": 2, "speed": 2, "qualifying": 1, "engine": 2, "control": 2}
+    if total != SKILL_POINTS:
+        exact = {key: value * SKILL_POINTS / total for key, value in values.items()}
+        scaled = {key: int(value) for key, value in exact.items()}
+        remainder = SKILL_POINTS - sum(scaled.values())
+        for key in sorted(exact, key=lambda k: exact[k] - scaled[k], reverse=True)[:remainder]:
+            scaled[key] += 1
+        values = scaled
+    return values
+
+for _profile in USER_PROFILES.values():
+    if isinstance(_profile, dict):
+        _profile["skills"] = migrate_skill_distribution(_profile.get("skills"))
+        _profile.setdefault("ability", random.choice(list(ABILITY_CATALOG)))
+save_profiles_if_needed = False
 
 # Gacha de estilos: loja apenas visual; confirmação de compra não consulta a Loritta.
 RARITY_DATA = {
@@ -900,21 +953,8 @@ def gacha_profile(user_id: int):
     profile.setdefault("spins", 0); profile.setdefault("style_collection", [])
     profile.setdefault("equipped_style", None); profile.setdefault("skip_roll_gamepass", False)
     profile.setdefault("skip_roll_active", False)
-    skills = profile.get("skills") or dict(PROFILE_PRESETS["balanced"]["skills"])
-    skills = {key: max(0, int(skills.get(key, 0))) for key, label, emoji in SKILL_FIELDS}
-    total = sum(skills.values())
-    if total != SKILL_POINTS:
-        # normalize allocation to 10 while keeping relative distribution
-        if total <= 0:
-            skills = dict(PROFILE_PRESETS["balanced"]["skills"])
-        else:
-            exact = {key: skills[key] * SKILL_POINTS / total for key in skills}
-            normalized = {key: int(exact[key]) for key in exact}
-            remainder = SKILL_POINTS - sum(normalized.values())
-            for key in sorted(exact, key=lambda k: exact[k] - normalized[k], reverse=True)[:remainder]:
-                normalized[key] += 1
-            skills = normalized
-    profile["skills"] = skills
+    profile["skills"] = migrate_skill_distribution(profile.get("skills"))
+    profile.setdefault("ability", random.choice(list(ABILITY_CATALOG)))
     return profile
 
 def roll_style():
@@ -1089,9 +1129,12 @@ class LobbyView(discord.ui.View):
             bonuses = (style or {}).get("skills", {})
             driver = Driver(
                 user=interaction.user, race_name=profile.get("name") or interaction.user.display_name,
-                curves=int(saved_skills.get("curves", 0)), straights=int(saved_skills.get("straights", 0)),
-                braking=int(saved_skills.get("braking", 0)), acceleration=int(saved_skills.get("acceleration", 0)),
+                tyre_management=int(saved_skills.get("tyre_management", 0)),
+                curves=int(saved_skills.get("curves", 0)), speed=int(saved_skills.get("speed", 0)),
+                qualifying=int(saved_skills.get("qualifying", 0)), engine=int(saved_skills.get("engine", 0)),
                 control=int(saved_skills.get("control", 0)),
+                straights=int(saved_skills.get("speed", 0)), braking=int(saved_skills.get("qualifying", 0)),
+                acceleration=int(saved_skills.get("engine", 0)), ability=profile.get("ability"),
                 style_name=equipped, style_curves=int(bonuses.get("curves",0)),
                 style_straights=int(bonuses.get("straights",0)), style_braking=int(bonuses.get("braking",0)),
                 style_acceleration=int(bonuses.get("acceleration",0)), style_control=int(bonuses.get("control",0)),
@@ -1697,25 +1740,22 @@ class InventoryView(discord.ui.View):
         await interaction.response.send_message("⏸️ Gamepass Pular Giro desativada no seu perfil.", ephemeral=True)
 
 class ProfileSkillsModal(discord.ui.Modal, title="Distribuir 10 pontos pessoais"):
-    curves = discord.ui.TextInput(label="Curvas", max_length=2, required=True)
-    straights = discord.ui.TextInput(label="Retas", max_length=2, required=True)
-    braking = discord.ui.TextInput(label="Frenagem", max_length=2, required=True)
-    acceleration = discord.ui.TextInput(label="Aceleração", max_length=2, required=True)
-    control = discord.ui.TextInput(label="Controle", max_length=2, required=True)
+    distribution = discord.ui.TextInput(label="Pontos na ordem indicada", placeholder="1, 2, 2, 1, 2, 2", max_length=30, required=True)
     def __init__(self, owner_id):
-        super().__init__(); self.owner_id = owner_id
+        super().__init__(); self.owner_id = owner_id; self.source_message_id = None
         profile = gacha_profile(owner_id)
-        for key in ("curves", "straights", "braking", "acceleration", "control"):
-            getattr(self, key).default = str(profile["skills"].get(key, 0))
+        self.distribution.default = ", ".join(str(profile["skills"].get(key, 0)) for key, _, _ in SKILL_FIELDS)
     async def on_submit(self, interaction):
         if interaction.user.id != self.owner_id:
             return await interaction.response.send_message("Esse formulário não é seu.", ephemeral=True)
         try:
-            skills = {key: int(getattr(self, key).value) for key in ("curves", "straights", "braking", "acceleration", "control")}
+            values = [int(part.strip()) for part in self.distribution.value.split(",")]
+            if len(values) != 6: raise ValueError
+            skills = {field[0]: value for field, value in zip(SKILL_FIELDS, values)}
         except ValueError:
-            return await interaction.response.send_message("Informe números inteiros nos cinco atributos.", ephemeral=True)
-        if any(value < 0 for value in skills.values()) or sum(skills.values()) != SKILL_POINTS:
-            return await interaction.response.send_message(f"Os pontos devem ser inteiros não negativos e somar exatamente {SKILL_POINTS}.", ephemeral=True)
+            return await interaction.response.send_message("Informe seis números inteiros separados por vírgula, na ordem exibida no perfil.", ephemeral=True)
+        if any(value < 0 or value > 10 for value in skills.values()) or sum(skills.values()) != SKILL_POINTS:
+            return await interaction.response.send_message(f"Os seis atributos devem ser inteiros entre 0 e 10 e somar {SKILL_POINTS}.", ephemeral=True)
         profile = gacha_profile(self.owner_id); profile["skills"] = skills; save_profiles()
         await interaction.response.send_message("✅ Distribuição pessoal salva.", ephemeral=True)
         await refresh_profile_message(interaction, self.source_message_id, profile)
@@ -1993,6 +2033,7 @@ async def commands_list(ctx):
         "`!f1` — cria um lobby; o host usa os botões do próprio painel para configurar, classificar e iniciar.\n"
         "`!perfil` — configura nome, idade, equipe, foto, estilo e inventário.\n`!roll-estilo` — roleta gacha de estilos de pilotos F1.\n`!roll-pendente` — recupera resultado aguardando confirmação.\n`!loja` — loja visual de giros (sonhos da Loritta; confirmação manual).\n`!colecao-estilos` — mostra estilos obtidos.\n`/adicionar_giros`, `/deletar_giros`, `/setar_estilo` e `/gamepass` — administração de giros/estilos.\n"
         "`!ajuda` — guia de funcionamento e explicação das estratégias.\n"
+        "`!campeonato` / `!ranking` / `!estatisticas` — classificação e dados da temporada.\n"
         "`!comandos` — exibe esta lista.\n"
         "`!f1status` — mostra estado do lobby/corrida.\n"
         "`!f1cancel` — cancela lobby/corrida (somente host).\n\n"
@@ -2017,7 +2058,7 @@ async def help_f1(ctx):
         "↗️ **Overtake Mode:** seleciona uma tentativa de ultrapassagem. Só é elegível se houver um carro imediatamente à frente dentro da janela de 1,0 segundo e energia suficiente (12). Gasta energia; chance depende da diferença, atributos e fatores aleatórios. Não garante ultrapassar. Se estiver fora da janela/sem energia, a tentativa aplica penalidade.\n"
         "⚡ **Boost Mode:** usa 15 de energia para ganhar ritmo no trecho. Se não houver energia suficiente, não ativa e a simulação aplica uma penalidade leve.\n\n"
         "**CARRO, PNEUS E CONDIÇÕES**\n"
-        "• Os 10 pontos são distribuídos entre Curvas, Retas, Frenagem, Aceleração e Controle. Retas/Aceleração ajudam nas retas; Curvas/Frenagem/Controle ajudam nos trechos técnicos e reduzem riscos.\n"
+        "• Os 10 pontos são distribuídos entre Gerenciamento de pneus, Curvas, Velocidade, Classificação, Motor e Controle.\n"
         "• Soft: rápido, mas desgasta muito. Medium: equilíbrio. Hard: menos aderência, maior durabilidade. Intermediate: indicado para pista úmida. Wet: melhor para chuva forte, mas fraco em pista seca. Pneus inadequados prejudicam o ritmo.\n"
         "• O desgaste reduz a condição do pneu ao longo dos segmentos. A energia é limitada e pode ser recuperada um pouco com Normal/Seguro. Clima chuvoso aumenta a perda de ritmo e o risco.\n"
         "• Erros e derrapagens são eventos probabilísticos; Controle, Frenagem, modo escolhido, chuva e desgaste influenciam o risco.\n\n"
@@ -2040,6 +2081,7 @@ def build_profile_embed(profile, member, guild):
     bonuses=style.get("skills", {}) if style else {}
     desc += "\n**📊 Atributos pessoais (10 pontos)**\n"
     desc += " • ".join(f"{label}: {personal.get(key,0)}" for key,label,emoji in SKILL_FIELDS)
+    desc += f"\n\n**✨ Habilidade especial:** {profile.get('ability') or 'Não definida'}\n_{ABILITY_CATALOG.get(profile.get('ability'), 'Habilidade passiva sorteada uma única vez.')}_"
     desc += "\n\n**🏆 Bônus do estilo**\n"
     desc += " • ".join(f"{label}: +{bonuses.get(key,0)}" for key,label,emoji in SKILL_FIELDS) if style else "Nenhum estilo equipado."
     desc += "\n\n**⚙️ Atributos finais (pessoal + estilo)**\n"
