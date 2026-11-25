@@ -50,3 +50,12 @@ Pontuação: 1º = 10, 2º = 7, 3º = 5, 4º = 3, 5º = 1. A volta mais rápida 
 ## Imagens dos eventos
 
 Os arquivos são opcionais. Consulte `app/assets/eventos/README.md` para os nomes esperados. Sem uma imagem local, o evento continua sendo mostrado em texto no painel da corrida.
+
+
+## Imagens de acontecimentos
+
+As imagens ficam em `app/assets/eventos/`, separadas por acontecimento. Adicione arquivos PNG, JPG, JPEG ou WEBP à pasta correspondente; o bot escolhe um deles aleatoriamente. Também é possível configurar links diretos em `app/assets/eventos/links.json`. Consulte o README dessa pasta para instruções.
+
+## Central de informações
+
+Use `!sistema` no Discord para abrir o painel interativo com informações sobre estilos e bônus, pneus e clima, habilidades especiais, atributos, pilotagem e novidades do bot.
