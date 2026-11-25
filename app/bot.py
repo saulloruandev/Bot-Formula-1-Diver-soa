@@ -70,6 +70,14 @@ SKILL_FIELDS = (
     ("engine", "Motor", "⚙️"),
     ("control", "Controle", "🎯"),
 )
+STYLE_SKILL_MAP = {
+    "tyre_management": None,
+    "curves": "curves",
+    "speed": "straights",
+    "qualifying": "braking",
+    "engine": "acceleration",
+    "control": "control",
+}
 ABILITY_CATALOG = {
     "Ultrapassador Nato": "Bônus pequeno em tentativas de ultrapassagem.",
     "Largada Explosiva": "Pequena vantagem na primeira volta.",
@@ -1878,7 +1886,7 @@ class RollLoadingView(discord.ui.View):
         super().__init__(timeout=180); self.owner_id=owner_id; self.style_data=style
     async def show_result(self, interaction, style):
         rarity=RARITY_DATA[style["rarity"]]
-        skills="\n".join(f"{emoji} **{label}:** {style['skills'][key]}" for key,label,emoji in SKILL_FIELDS)
+        skills="\n".join(f"{emoji} **{label}:** {style.get('skills', {}).get(STYLE_SKILL_MAP.get(key), 0) if STYLE_SKILL_MAP.get(key) else 0}" for key,label,emoji in SKILL_FIELDS)
         embed=discord.Embed(title=f"{rarity['emoji']} ESTILO SORTEADO: {style['name']}",description=f"**Raridade: {style['rarity'].upper()}**\n{style['trait']}\n\n{skills}\n\n**Pontos do estilo: {rarity['points']}**\n\nDeseja ficar com este estilo?",color=rarity["color"])
         embed.set_footer(text="Aceitar adiciona ao inventário. Recusar descarta o resultado; o giro já foi consumido.")
         resultview=RollConfirmView(self.owner_id, style)
@@ -1954,7 +1962,7 @@ async def pending_roll_command(ctx):
         return await ctx.send("Você não possui resultado pendente de confirmação.")
     style = pending.get("style", {})
     rarity = RARITY_DATA.get(style.get("rarity"), RARITY_DATA["Comum"])
-    skills = "\n".join(f"{emoji} **{label}:** {style.get('skills', {}).get(key, 0)}" for key, label, emoji in SKILL_FIELDS)
+    skills = "\n".join(f"{emoji} **{label}:** {style.get('skills', {}).get(STYLE_SKILL_MAP.get(key), 0) if STYLE_SKILL_MAP.get(key) else 0}" for key, label, emoji in SKILL_FIELDS)
     embed = discord.Embed(title=f"{rarity['emoji']} Resultado pendente: {style.get('name', 'Estilo desconhecido')}", description=f"**Raridade:** {style.get('rarity')}\n{style.get('trait', '')}\n\n{skills}\n\n**Pontos do estilo:** {rarity['points']}\nDeseja aceitar ou recusar?", color=rarity["color"])
     await ctx.send(embed=embed, view=RollConfirmView(ctx.author.id, style))
 
@@ -2285,9 +2293,10 @@ def build_profile_embed(profile, member, guild):
     desc += " • ".join(f"{label}: {personal.get(key,0)}" for key,label,emoji in SKILL_FIELDS)
     desc += f"\n\n**✨ Habilidade especial:** {profile.get('ability') or 'Não definida'}\n_{ABILITY_CATALOG.get(profile.get('ability'), 'Habilidade passiva sorteada uma única vez.')}_"
     desc += "\n\n**🏆 Bônus do estilo**\n"
-    desc += " • ".join(f"{label}: +{bonuses.get(key,0)}" for key,label,emoji in SKILL_FIELDS) if style else "Nenhum estilo equipado."
+    style_values = {key: int(bonuses.get(source, 0)) if source else 0 for key, source in STYLE_SKILL_MAP.items()}
+    desc += " • ".join(f"{label}: +{style_values.get(key,0)}" for key,label,emoji in SKILL_FIELDS) if style else "Nenhum estilo equipado."
     desc += "\n\n**⚙️ Atributos finais (pessoal + estilo)**\n"
-    desc += " • ".join(f"{label}: {int(personal.get(key,0))+int(bonuses.get(key,0))}" for key,label,emoji in SKILL_FIELDS)
+    desc += " • ".join(f"{label}: {int(personal.get(key,0))+style_values.get(key,0)}" for key,label,emoji in SKILL_FIELDS)
     embed=discord.Embed(title="🏎️ Perfil do piloto",description=desc,color=discord.Color.orange())
     if profile.get("photo_url"): embed.set_image(url=profile["photo_url"])
     return embed
