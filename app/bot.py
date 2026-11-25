@@ -1216,13 +1216,15 @@ def calculate_qualifying_time(driver, race):
     rain = WEATHER[race.weather_name]["rain"]
     weighted = (
         driver.effective_skill("curves") * circuit["corners"] + driver.effective_skill("straights") * circuit["straights"]
-        + driver.effective_skill("engine") * circuit["acceleration"]
+        + driver.effective_skill("acceleration") * circuit["acceleration"]
         + driver.effective_skill("control") * circuit["control"]
-        + driver.effective_skill("qualifying") * 0.08
+        + (driver.qualifying + driver.style_braking) * 0.08
     )
     skill_delta = weighted - 4.0
     tire_delta = (tire_weather_multiplier(driver.tire, rain) - 1.0) * 2.8
     weather_penalty = rain * 1.8
+    if driver.ability == "Motorista de Qualificação":
+        skill_delta += 0.20
     random_delta = random.uniform(-0.22, 0.22)
     return max(60.0, circuit["base_lap"] - skill_delta * 0.65 + tire_delta + weather_penalty + random_delta)
 
