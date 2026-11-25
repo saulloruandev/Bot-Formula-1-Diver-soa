@@ -1356,6 +1356,7 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
 
     skill_bonus = skill_segment_bonus(driver, segment)
     pit_penalty = 0.0
+    event = ""
     if action.get("pit"):
         chosen_tire = action.get("pit_tire") or ("Wet" if rain > 0.50 else "Intermediate" if rain > 0.10 else "Medium")
         if chosen_tire not in TIRES:
@@ -1396,7 +1397,6 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     # Energia de jogo substitui um uso simplificado da gestão elétrica:
     # Boost consome energia e dá bônus, Overtake Mode consome energia quando elegível.
     energy_adjustment = 0.0
-    event = ""
 
     if action["boost"]:
         if driver.energy >= 15:
@@ -1518,7 +1518,7 @@ def standings_embed(race, lap, segment_label, events):
         color=discord.Color.blue(),
     )
     if events:
-        embed.add_field(name="Eventos do trecho", value="\n".join(events[:10]), inline=False)
+        embed.add_field(name="📺 Transmissão — acontecimentos da volta", value="\n".join(events[-12:]), inline=False)
     return embed
 
 
