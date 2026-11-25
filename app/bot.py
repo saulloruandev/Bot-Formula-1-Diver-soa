@@ -308,42 +308,19 @@ PROFILE_PRESETS = {
 }
 
 def load_profiles():
+    """Carrega os dados locais sem modificá-los antes de criar o backup de migração."""
     try:
         if PROFILE_FILE.exists():
             data = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                return {}
-            # Migra perfis antigos (20 pontos) para o novo limite de 10,
-            # preservando proporcionalmente a distribuição anterior.
-            changed = False
-            for profile in data.values():
-                if not isinstance(profile, dict):
-                    continue
-                skills = profile.get("skills")
-                if not isinstance(skills, dict):
-                    continue
-                values = {key: max(0, int(skills.get(key, 0))) for key, label, emoji in SKILL_FIELDS}
-                total = sum(values.values())
-                if total > SKILL_POINTS:
-                    exact = {key: values[key] * SKILL_POINTS / total for key in values}
-                    scaled = {key: int(exact[key]) for key in exact}
-                    remainder = SKILL_POINTS - sum(scaled.values())
-                    order = sorted(exact, key=lambda key: exact[key] - scaled[key], reverse=True)
-                    for key in order[:remainder]:
-                        scaled[key] += 1
-                    profile["skills"] = scaled
-                    changed = True
-            if changed:
-                PROFILE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            return data
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        pass
+            return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        print("⚠️ profiles.json inválido ou inacessível; os dados não serão sobrescritos.")
     return {}
 
 USER_PROFILES = load_profiles()
 
 def migrate_skill_distribution(skills):
-    """Migra cinco atributos antigos para seis, preservando a proporção total."""
+    """Converte os cinco atributos antigos para seis sem retirar pontos existentes."""
     skills = skills if isinstance(skills, dict) else {}
     if "speed" not in skills and "straights" in skills:
         values = {
@@ -358,7 +335,7 @@ def migrate_skill_distribution(skills):
         values = {key: max(0, int(skills.get(key, 0))) for key, _, _ in SKILL_FIELDS}
     total = sum(values.values())
     if total <= 0:
-        return {"tyre_management": 1, "curves": 2, "speed": 2, "qualifying": 1, "engine": 2, "control": 2}
+        return {"tyre_management": 0, "curves": 2, "speed": 2, "qualifying": 2, "engine": 2, "control": 2}
     if total != SKILL_POINTS:
         exact = {key: value * SKILL_POINTS / total for key, value in values.items()}
         scaled = {key: int(value) for key, value in exact.items()}
@@ -367,18 +344,6 @@ def migrate_skill_distribution(skills):
             scaled[key] += 1
         values = scaled
     return values
-
-for _profile in USER_PROFILES.values():
-    if isinstance(_profile, dict):
-        _profile["skills"] = migrate_skill_distribution(_profile.get("skills"))
-        _profile.setdefault("ability", random.choice(list(ABILITY_CATALOG)))
-        _profile.setdefault("ability_collection", [_profile["ability"]] if _profile.get("ability") else [])
-        _profile.setdefault("ability_spins", 0)
-        _profile.setdefault("skills_locked", True)
-try:
-    write_profiles_file()
-except OSError as exc:
-    print(f"⚠️ Não foi possível salvar os perfis na inicialização: {exc}")
 
 # Gacha de estilos: loja apenas visual; confirmação de compra não consulta a Loritta.
 RARITY_DATA = {
@@ -975,6 +940,91 @@ PILOT_ROLE_IDS = {
     'Juan Manuel Fangio': 1570225558036422757,  # ID do cargo de Juan Manuel Fangio
 }
 
+PROFILE_MIGRATION_VERSION = 2
+PROFILE_MIGRATION_BACKUP_FILE = PROFILE_FILE.with_name(
+    f"profiles.json.pre-migration-v{PROFILE_MIGRATION_VERSION}.bak"
+)
+
+def migrate_existing_profiles():
+    """Atualiza o formato dos perfis uma única vez, preservando dados e criando backup."""
+    if not isinstance(USER_PROFILES, dict) or not USER_PROFILES:
+        return
+    changed = False
+    if PROFILE_FILE.exists() and not PROFILE_MIGRATION_BACKUP_FILE.exists():
+        try:
+            PROFILE_MIGRATION_BACKUP_FILE.write_text(
+                PROFILE_FILE.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            print(f"🛡️ Backup da migração criado: {PROFILE_MIGRATION_BACKUP_FILE.name}")
+        except OSError as exc:
+            print(f"⚠️ Migração cancelada: não foi possível criar backup ({exc}).")
+            return
+
+    styles_by_name = {item["name"].casefold(): item for item in PILOT_STYLES}
+    for profile in USER_PROFILES.values():
+        if not isinstance(profile, dict):
+            continue
+        old_skills = profile.get("skills")
+        new_skills = migrate_skill_distribution(old_skills)
+        if old_skills != new_skills:
+            profile["skills"] = new_skills
+            changed = True
+
+        defaults = {
+            "age": None, "team": "", "photo_url": "", "spins": 0,
+            "style_collection": [], "equipped_style": None,
+            "skip_roll_gamepass": False, "skip_roll_active": False,
+            "ability": None, "ability_collection": [], "ability_spins": 0,
+            "pending_ability_roll": None, "skills_locked": True,
+        }
+        for key, value in defaults.items():
+            if key not in profile:
+                profile[key] = value.copy() if isinstance(value, (dict, list)) else value
+                changed = True
+
+        # Não substitui habilidade antiga por uma aleatória: preserva o nome e a coleção.
+        if profile.get("ability") and profile["ability"] not in profile["ability_collection"]:
+            profile["ability_collection"].append(profile["ability"])
+            changed = True
+
+        # Atualiza os bônus dos estilos já obtidos para o formato de seis atributos.
+        collection = profile.get("style_collection")
+        if not isinstance(collection, list):
+            collection = []
+            profile["style_collection"] = collection
+            changed = True
+        for index, owned_style in enumerate(collection):
+            if not isinstance(owned_style, dict):
+                continue
+            current = styles_by_name.get(str(owned_style.get("name", "")).casefold())
+            if current:
+                updated = {**owned_style, **current}
+                if updated != owned_style:
+                    collection[index] = updated
+                    changed = True
+
+        equipped = profile.get("equipped_style")
+        if equipped:
+            current = styles_by_name.get(str(equipped).casefold())
+            if current and not any(
+                isinstance(item, dict) and item.get("name") == current["name"]
+                for item in collection
+            ):
+                collection.append(dict(current))
+                changed = True
+
+        profile["ability_spins"] = max(0, int(profile.get("ability_spins") or 0))
+        profile["spins"] = max(0, int(profile.get("spins") or 0))
+
+    if changed:
+        try:
+            write_profiles_file()
+            print("✅ Perfis migrados para o formato de seis atributos.")
+        except OSError as exc:
+            print(f"⚠️ Não foi possível salvar a migração dos perfis: {exc}")
+
+migrate_existing_profiles()
+
 SHOP_PACKAGES = {
     "1": {"spins": 1, "dreams": "5k sonhos"},
     "5": {"spins": 5, "dreams": "25k sonhos"},
@@ -1007,10 +1057,12 @@ async def sync_pilot_role(guild, member, style_name):
         return target_role, f"Falha ao sincronizar cargos no Discord: {exc}"
 
 async def equip_style_consistently(guild, member, profile, style):
-    """Troca estilo ativo e cargos. O inventário mantém apenas um estilo equipado/possuído."""
+    """Equipa um estilo sem apagar os demais estilos já pertencentes ao jogador."""
     role, warning = await sync_pilot_role(guild, member, style.get("name"))
     profile["equipped_style"] = style["name"]
-    profile["style_collection"] = [dict(style)]
+    collection = profile.setdefault("style_collection", [])
+    if not any(isinstance(item, dict) and item.get("name") == style["name"] for item in collection):
+        collection.append(dict(style))
     save_profiles()
     return role, warning
 
@@ -2359,13 +2411,40 @@ async def adicionar_giros_habilidade(interaction: discord.Interaction, jogador: 
     await interaction.response.send_message(f"✨ Adicionados **{quantidade} giro(s) de habilidade** para {jogador.mention}. Total: **{profile['ability_spins']}**.", ephemeral=True)
 
 
-@bot.tree.command(name="setar_estilo", description="Define diretamente o estilo equipado de um jogador (admin)")
-@app_commands.describe(jogador="Pessoa que receberá o estilo", estilo="Nome exato do piloto/estilo")
+def find_style_by_keyword(keyword: str):
+    """Busca estilo por nome completo, início ou trecho; retorna (estilo, opções)."""
+    query = keyword.strip().casefold()
+    if not query:
+        return None, []
+    exact = [item for item in PILOT_STYLES if item["name"].casefold() == query]
+    if exact:
+        return exact[0], exact
+    starts = [item for item in PILOT_STYLES if item["name"].casefold().startswith(query)]
+    if len(starts) == 1:
+        return starts[0], starts
+    if starts:
+        return None, starts
+    contains = [item for item in PILOT_STYLES if query in item["name"].casefold()]
+    if len(contains) == 1:
+        return contains[0], contains
+    return None, contains
+
+@bot.tree.command(name="setar_estilo", description="Define o estilo de um jogador pelo nome ou palavra-chave (admin)")
+@app_commands.describe(jogador="Pessoa que receberá o estilo", estilo="Nome ou palavra-chave, exemplo: prost, senna")
 @app_commands.checks.has_permissions(administrator=True)
 async def setar_estilo(interaction: discord.Interaction, jogador: discord.Member, estilo: str):
-    chosen = next((item for item in PILOT_STYLES if item["name"].casefold() == estilo.strip().casefold()), None)
+    chosen, matches = find_style_by_keyword(estilo)
     if chosen is None:
-        return await interaction.response.send_message("Estilo não encontrado. Use o nome exato de um dos pilotos da coleção.", ephemeral=True)
+        if matches:
+            options = "\n".join(f"• {item['name']} ({item['rarity']})" for item in matches[:15])
+            return await interaction.response.send_message(
+                f"Encontrei mais de um estilo para **{estilo}**. Seja mais específico:\n{options}",
+                ephemeral=True,
+            )
+        return await interaction.response.send_message(
+            f"Não encontrei estilo com a palavra **{estilo}**. Tente uma parte do nome, como prost ou senna.",
+            ephemeral=True,
+        )
     profile = gacha_profile(jogador.id)
     role, warning = await equip_style_consistently(interaction.guild, jogador, profile, dict(chosen))
     await send_admin_receipt(interaction.guild, interaction.user, jogador, "Setar estilo", f"Estilo atribuído: {chosen['name']} ({chosen['rarity']})")
@@ -2373,6 +2452,61 @@ async def setar_estilo(interaction: discord.Interaction, jogador: discord.Member
     if role: response += f" Cargo: {role.mention}."
     if warning: response += f"\n⚠️ {warning}"
     await interaction.response.send_message(response, ephemeral=True)
+
+@bot.tree.command(name="setar_estilo_cargo", description="Define o estilo de um jogador selecionando o cargo (admin)")
+@app_commands.describe(jogador="Pessoa que receberá o estilo", cargo="Cargo correspondente ao estilo")
+@app_commands.checks.has_permissions(administrator=True)
+async def setar_estilo_cargo(interaction: discord.Interaction, jogador: discord.Member, cargo: discord.Role):
+    style_name = next(
+        (name for name, role_id in PILOT_ROLE_IDS.items() if role_id and int(role_id) == cargo.id),
+        None,
+    )
+    if not style_name:
+        return await interaction.response.send_message(
+            "Esse cargo não está associado a nenhum estilo em PILOT_ROLE_IDS.",
+            ephemeral=True,
+        )
+    chosen = next((item for item in PILOT_STYLES if item["name"] == style_name), None)
+    if not chosen:
+        return await interaction.response.send_message(
+            "O cargo foi reconhecido, mas o estilo correspondente não existe no catálogo atual.",
+            ephemeral=True,
+        )
+    profile = gacha_profile(jogador.id)
+    role, warning = await equip_style_consistently(interaction.guild, jogador, profile, dict(chosen))
+    await send_admin_receipt(interaction.guild, interaction.user, jogador, "Setar estilo pelo cargo", f"Estilo atribuído: {chosen['name']} ({chosen['rarity']})")
+    response = f"🏎️ Estilo **{chosen['name']}** setado para {jogador.mention} pelo cargo {cargo.mention}."
+    if warning: response += f"\n⚠️ {warning}"
+    await interaction.response.send_message(response, ephemeral=True)
+
+@bot.tree.command(name="sincronizar_estilo", description="Atualiza o estilo do perfil conforme o cargo atual (admin)")
+@app_commands.describe(jogador="Jogador cujos cargos serão verificados")
+@app_commands.checks.has_permissions(administrator=True)
+async def sincronizar_estilo(interaction: discord.Interaction, jogador: discord.Member):
+    reverse_roles = {int(role_id): name for name, role_id in PILOT_ROLE_IDS.items() if role_id}
+    found = [role for role in jogador.roles if role.id in reverse_roles]
+    if len(found) != 1:
+        if not found:
+            message = "Esse membro não possui nenhum cargo de estilo reconhecido. O perfil foi mantido sem alterações."
+        else:
+            message = "Encontrei mais de um cargo de estilo. Remova os cargos extras e tente novamente; não alterei o perfil."
+        return await interaction.response.send_message(message, ephemeral=True)
+
+    style_name = reverse_roles[found[0].id]
+    style = next((item for item in PILOT_STYLES if item["name"] == style_name), None)
+    if not style:
+        return await interaction.response.send_message("O cargo foi reconhecido, mas o estilo não existe no catálogo atual.", ephemeral=True)
+
+    profile = gacha_profile(jogador.id)
+    profile["equipped_style"] = style_name
+    collection = profile.setdefault("style_collection", [])
+    if not any(isinstance(item, dict) and item.get("name") == style_name for item in collection):
+        collection.append(dict(style))
+    save_profiles()
+    await interaction.response.send_message(
+        f"✅ Perfil de {jogador.mention} sincronizado com o cargo **{style_name}**.",
+        ephemeral=True,
+    )
 
 @bot.tree.command(name="deletar_giros", description="Remove giros de um jogador (admin)")
 @app_commands.describe(jogador="Pessoa de quem remover giros", quantidade="Quantidade de giros a remover")
@@ -2821,6 +2955,36 @@ async def on_ready():
         print(f"Falha ao sincronizar slash commands: {exc}")
     print("Comandos: !f1, !perfil, !roll-estilo, !loja, !sistema, !comandos, !ajuda, !f1status, !f1cancel")
 
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    """Sincroniza o perfil quando o membro troca para exatamente um cargo de estilo."""
+    if before.roles == after.roles:
+        return
+    reverse_roles = {int(role_id): name for name, role_id in PILOT_ROLE_IDS.items() if role_id}
+    style_roles = [role for role in after.roles if role.id in reverse_roles]
+    if len(style_roles) != 1:
+        if len(style_roles) > 1:
+            print(f"⚠️ {after} possui vários cargos de estilo; perfil não foi alterado.")
+        # Remover o cargo não apaga o estilo salvo automaticamente.
+        return
+
+    style_name = reverse_roles[style_roles[0].id]
+    style = next((item for item in PILOT_STYLES if item["name"] == style_name), None)
+    if not style:
+        return
+    profile = gacha_profile(after.id)
+    if profile.get("equipped_style") == style_name:
+        return
+    profile["equipped_style"] = style_name
+    collection = profile.setdefault("style_collection", [])
+    if not any(isinstance(item, dict) and item.get("name") == style_name for item in collection):
+        collection.append(dict(style))
+    try:
+        save_profiles()
+        print(f"🔄 Estilo de {after} sincronizado pelo cargo: {style_name}.")
+    except OSError:
+        print(f"⚠️ Não foi possível salvar o estilo sincronizado de {after}.")
 
 @bot.event
 async def on_command_error(ctx, error):
