@@ -129,6 +129,7 @@ class Driver:
     grid_position: Optional[int] = None
     total_time: float = 0.0
     last_lap_time: float = 0.0
+    best_lap_time: Optional[float] = None
     tire_wear: float = 0.0  # 0-100
     energy: float = 100.0  # energia de jogo, 0-100
     distance: float = 0.0  # progresso em unidades de segmento
@@ -955,6 +956,7 @@ async def equip_style_consistently(guild, member, profile, style):
     return role, warning
 
 def gacha_profile(user_id: int):
+    is_new_profile = str(user_id) not in USER_PROFILES
     profile = USER_PROFILES.setdefault(str(user_id), {
         "name": "", "age": None, "team": "", "photo_url": "",
         "skills": dict(PROFILE_PRESETS["balanced"]["skills"]),
@@ -968,6 +970,8 @@ def gacha_profile(user_id: int):
     profile.setdefault("skip_roll_active", False)
     profile["skills"] = migrate_skill_distribution(profile.get("skills"))
     profile.setdefault("ability", random.choice(list(ABILITY_CATALOG)))
+    if is_new_profile:
+        save_profiles()
     return profile
 
 def roll_style():
@@ -1451,7 +1455,7 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
 
 
 def current_order(race):
-    return sorted(race.drivers.values(), key=lambda d: d.total_time)
+    return sorted(race.drivers.values(), key=lambda d: (d.retired, d.total_time))
 
 
 def standings_embed(race, lap, segment_label, events):
@@ -1734,14 +1738,16 @@ async def run_race(race):
         for driver in race.drivers.values():
             if not driver.finished:
                 driver.last_lap_time = driver.total_time - lap_start_times.get(driver.user.id, driver.total_time)
+                if not driver.retired and driver.last_lap_time > 0 and (driver.best_lap_time is None or driver.last_lap_time < driver.best_lap_time):
+                    driver.best_lap_time = driver.last_lap_time
                 if lap == race.total_laps:
                     driver.finished = True
         await asyncio.sleep(0.5)
 
     final_order = current_order(race)
-    fastest = min((d for d in final_order if d.last_lap_time > 0 and not d.retired), key=lambda d: d.last_lap_time, default=None)
+    fastest = min((d for d in final_order if d.best_lap_time is not None and not d.retired), key=lambda d: d.best_lap_time, default=None)
     if fastest:
-        await publish_important_event(race, f"⏱️ Volta mais rápida: {driver_display_name(fastest)} — {format_time(fastest.last_lap_time)}")
+        await publish_important_event(race, f"⏱️ Volta mais rápida: {driver_display_name(fastest)} — {format_time(fastest.best_lap_time)}")
     await register_championship_result(race, final_order, fastest)
     podium = "\n".join(
         f"**P{position} — {driver_display_name(driver)}** | Tempo acumulado: `{format_time(driver.total_time)}` | "
@@ -2146,7 +2152,7 @@ async def register_championship_result(race, order, fastest):
             "position": position,
             "retired": bool(driver.retired),
             "fastest_lap": bool(fastest and fastest.user.id == driver.user.id),
-            "lap_time": driver.last_lap_time,
+            "lap_time": driver.best_lap_time or driver.last_lap_time,
         })
     season.setdefault("races", []).append({
         "race_id": race_id, "circuit": race.circuit_name,
