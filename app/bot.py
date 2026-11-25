@@ -348,6 +348,7 @@ for _profile in USER_PROFILES.values():
     if isinstance(_profile, dict):
         _profile["skills"] = migrate_skill_distribution(_profile.get("skills"))
         _profile.setdefault("ability", random.choice(list(ABILITY_CATALOG)))
+        _profile.setdefault("skills_locked", True)
 try:
     PROFILE_FILE.write_text(json.dumps(USER_PROFILES, ensure_ascii=False, indent=2), encoding="utf-8")
 except OSError:
@@ -959,6 +960,7 @@ def gacha_profile(user_id: int):
         "skills": dict(PROFILE_PRESETS["balanced"]["skills"]),
         "spins": 0, "style_collection": [], "equipped_style": None,
         "skip_roll_gamepass": False, "skip_roll_active": False,
+        "skills_locked": False, "ability": random.choice(list(ABILITY_CATALOG)),
     })
     profile.setdefault("age", None); profile.setdefault("team", ""); profile.setdefault("photo_url", "")
     profile.setdefault("spins", 0); profile.setdefault("style_collection", [])
@@ -1610,7 +1612,7 @@ EVENT_IMAGE_RULES = {
     "acidente": ("colisao.png", "💥"),
     "derrapagem": ("rodada.png", "🌀"),
     "ESTOURO DE PNEU": ("pneu.png", "🛞"),
-    "Abandono": ("quebra_motor.png", "🔧"),
+    "Abandono": ("abandono.png", "⛔"),
     "Safety Car": ("safety_car.png", "🚨"),
     "bandeira vermelha": ("bandeira_vermelha.png", "🟥"),
     "volta mais rápida": ("volta_rapida.png", "⏱️"),
@@ -1734,6 +1736,8 @@ async def run_race(race):
 
     final_order = current_order(race)
     fastest = min((d for d in final_order if d.last_lap_time > 0 and not d.retired), key=lambda d: d.last_lap_time, default=None)
+    if fastest:
+        await publish_important_event(race, f"⏱️ Volta mais rápida: {driver_display_name(fastest)} — {format_time(fastest.last_lap_time)}")
     await register_championship_result(race, final_order, fastest)
     podium = "\n".join(
         f"**P{position} — {driver_display_name(driver)}** | Tempo acumulado: `{format_time(driver.total_time)}` | "
@@ -1827,7 +1831,7 @@ class ProfileSkillsModal(discord.ui.Modal, title="Distribuir 10 pontos pessoais"
             return await interaction.response.send_message("Informe seis números inteiros separados por vírgula, na ordem exibida no perfil.", ephemeral=True)
         if any(value < 0 or value > 10 for value in skills.values()) or sum(skills.values()) != SKILL_POINTS:
             return await interaction.response.send_message(f"Os seis atributos devem ser inteiros entre 0 e 10 e somar {SKILL_POINTS}.", ephemeral=True)
-        profile = gacha_profile(self.owner_id); profile["skills"] = skills; save_profiles()
+        profile = gacha_profile(self.owner_id); profile["skills"] = skills; profile["skills_locked"] = True; save_profiles()
         await interaction.response.send_message("✅ Distribuição pessoal salva.", ephemeral=True)
         await refresh_profile_message(interaction, self.source_message_id, profile)
 
@@ -1840,6 +1844,9 @@ class ProfileView(discord.ui.View):
     @discord.ui.button(label="Distribuir pontos", emoji="📊", style=discord.ButtonStyle.secondary, row=0)
     async def distribute(self, interaction, button):
         if interaction.user.id != self.owner_id: return await interaction.response.send_message("Esse botão não é seu.", ephemeral=True)
+        profile = gacha_profile(self.owner_id)
+        if profile.get("skills_locked"):
+            return await interaction.response.send_message("Seus atributos já foram definidos e não podem ser alterados.", ephemeral=True)
         modal=ProfileSkillsModal(self.owner_id); modal.source_message_id=interaction.message.id; await interaction.response.send_modal(modal)
     @discord.ui.button(label="Inventário",emoji="🎒",style=discord.ButtonStyle.secondary,row=0)
     async def inventory(self,interaction,button):
