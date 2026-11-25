@@ -917,7 +917,12 @@ def expand_style_distributions():
             allocated = {key: 0 for key in keys}
             allocated["control"] = remaining
         if style["rarity"] in ("Comum", "Incomum") and index % 2 == 0:
-            weakest = min(keys, key=lambda key: (allocated[key], keys.index(key)))
+            weakest = keys[index % len(keys)]
+            if allocated[weakest] == 0:
+                weakest = next(
+                    (keys[(index + offset) % len(keys)] for offset in range(1, len(keys)) if allocated[keys[(index + offset) % len(keys)]] > 0),
+                    weakest
+                )
             lost = allocated[weakest]
             allocated[weakest] = 0
             strongest = max((key for key in keys if key != weakest), key=lambda key: allocated[key])
