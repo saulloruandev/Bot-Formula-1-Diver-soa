@@ -2558,13 +2558,13 @@ SYSTEM_PAGES = ("estilos", "pneus", "habilidades", "pilotagem", "novidades")
 def system_embed(page):
     if page == "estilos":
         rarity_lines = [f"{data['emoji']} **{rarity}** — {data['points']} pontos extras • chance {data['chance']}%" for rarity, data in RARITY_DATA.items()]
-        stat_labels = {"curves":"CUR","straights":"RET","braking":"CLA","acceleration":"MOT","control":"CTL"}
+        stat_labels = {"tyre_management":"PNE","curves":"CUR","straights":"RET","braking":"CLA","acceleration":"MOT","control":"CTL"}
         style_lines = []
         for style in PILOT_STYLES:
             vals = " ".join(f"{stat_labels[k]}+{v}" for k, v in style.get("skills", {}).items() if v)
             style_lines.append(f"• **{style['name']}** ({style['rarity']}): {vals or 'sem bônus'}")
         description = "**Raridades e pontos extras**\n" + "\n".join(rarity_lines)
-        description += "\n\n**Como ler os bônus**\nCUR = Curvas • RET = Velocidade em retas • CLA = Classificação/frenagem • MOT = Motor/aceleração • CTL = Controle. Os bônus são somados aos atributos pessoais durante a corrida."
+        description += "\n\n**Como ler os bônus**\nPNE = Gerenciamento de pneus • CUR = Curvas • RET = Velocidade em retas • CLA = Classificação/frenagem • MOT = Motor/aceleração • CTL = Controle. Os bônus são somados aos atributos pessoais durante a corrida. Cada estilo tem uma distribuição própria e pode ter atributos zerados."
         description += "\n\n**Estilos disponíveis**\n" + "\n".join(style_lines)
         if len(description) > 4000:
             description = description[:3900] + "\n… (catálogo completo permanece no código/coleção de estilos)."
@@ -2588,7 +2588,7 @@ def system_embed(page):
         "**Novidades desta versão**\n"
         "• Seis atributos pessoais: gerenciamento de pneus, curvas, velocidade, classificação, motor e controle.\n"
         "• Distribuição fixa de 10 pontos por piloto.\n"
-        "• Habilidade especial passiva sorteada uma única vez.\n"
+        "• Habilidades especiais obtidas pela roleta, por 25k sonhos cada giro.\n"
         "• Campeonato com pontuação, histórico, ranking e estatísticas persistentes.\n"
         "• Pontos do campeonato: 10 / 7 / 5 / 3 / 1; +1 pela volta mais rápida se terminar no top 3.\n"
         "• Imagens de eventos configuráveis por pastas e links, com seleção aleatória.\n"
@@ -2642,7 +2642,7 @@ async def help_f1(ctx):
     embed = discord.Embed(title="📘 Guia de corrida — F1 Discord Racing", color=discord.Color.green())
     embed.description = (
         "**1) Criar e entrar:** use `!f1`. Pilotos clicam Entrar na corrida, configuram o carro e os pneus, e marcam Estou pronto.\n"
-        "**2) Perfil/crachá:** `!perfil` mostra estilo equipado, cargo, dados pessoais e botões Configurar/Inventário.\n**3) Gacha:** `!roll-estilo` permite gastar giros para obter estilos de pilotos. `!loja` mostra pacotes em sonhos; a compra é confirmada manualmente e o bot não desconta sonhos. `!colecao-estilos` lista os estilos recebidos. Os estilos têm raridades e pontos extras próprios. Nome aparece na corrida; equipe e pneu favorito são visuais, sem impacto na simulação. Perfil salvo é carregado no próximo lobby; os pontos pessoais só podem ser distribuídos uma vez e depois ficam bloqueados.\n"
+        "**2) Perfil/crachá:** `!perfil [@membro]` consulta o próprio perfil ou o perfil de outro piloto; os botões de configuração aparecem apenas no próprio perfil.\n**3) Gacha:** `!roll-estilo` permite gastar giros para obter estilos de pilotos. `!transferir-giros @membro quantidade` envia giros de estilo para outro membro. `!roll-habilidade` usa um giro de habilidade liberado pelo administrador após pagamento de 25k sonhos. `!loja` mostra pacotes em sonhos; a compra é confirmada manualmente e o bot não desconta sonhos. `!colecao-estilos` lista os estilos recebidos. Os estilos têm raridades e pontos extras próprios. Nome aparece na corrida; equipe e pneu favorito são visuais, sem impacto na simulação. Perfil salvo é carregado no próximo lobby; os pontos pessoais só podem ser distribuídos uma vez e depois ficam bloqueados.\n"
         "**4) Classificação:** o host clica Iniciar classificação no painel do lobby. A classificação usa habilidades, pneus, clima e uma variação aleatória moderada para definir o grid.\n"
         "**5) Corrida:** o host clica Iniciar corrida no painel de classificação. Cada volta é dividida em quatro trechos de reta/curva. Em cada trecho, todos escolhem pelos mesmos botões públicos; a escolha fica oculta até todos confirmarem. O prazo é 45 segundos (ou o valor configurado); quem não decidir recebe Seguro.\n\n"
         "**AÇÕES DE PILOTAGEM**\n"
