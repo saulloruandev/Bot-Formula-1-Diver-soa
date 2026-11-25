@@ -22,7 +22,7 @@ F1_Discord_Racing/
 
 - `bot.py` (raiz): ponto de entrada.
 - `app/bot.py`: lógica principal do bot.
-- `app/profiles.json`: perfis, atributos, habilidades, giros e estilos.
+- `app/profiles.json`: dados locais dos jogadores (criado automaticamente; ignorado pelo Git).
 - `app/campeonato.json`: histórico e pontuação das temporadas (criado automaticamente).
 - `app/assets/eventos/`: imagens opcionais para eventos importantes.
 - `.env`: token do Discord. Nunca envie esse arquivo ao GitHub.
@@ -59,3 +59,12 @@ As imagens ficam em `app/assets/eventos/`, separadas por acontecimento. Adicione
 ## Central de informações
 
 Use `!sistema` no Discord para abrir o painel interativo com informações sobre estilos e bônus, pneus e clima, habilidades especiais, atributos, pilotagem e novidades do bot.
+
+
+## Persistência dos perfis dos jogadores
+
+Os perfis, giros, estilos obtidos/equipados, atributos e dados pessoais são salvos em `app/profiles.json` na máquina que executa o bot. Esse arquivo **não deve ser enviado ao GitHub**: ele está no `.gitignore` para que atualizações do código não sobrescrevam o progresso dos jogadores.
+
+O bot cria o arquivo automaticamente quando necessário e mantém uma cópia anterior em `app/profiles.json.bak` ao salvar. Faça backup periódico desses dois arquivos. Se trocar de computador ou servidor, copie os arquivos para a pasta `app` da nova instalação antes de iniciar o bot.
+
+**Importante ao atualizar uma instalação antiga:** antes de fazer `git pull`, copie `app/profiles.json` para um local seguro. Como esse arquivo era versionado em versões anteriores, a primeira atualização que o remover do Git pode exigir que você restaure o backup local depois do pull.

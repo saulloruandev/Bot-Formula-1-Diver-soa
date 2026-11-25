@@ -3,3 +3,8 @@
 venv/
 __pycache__/
 *.py[cod]
+
+# Dados locais dos jogadores (não versionar)
+app/profiles.json
+app/profiles.json.bak
+app/profiles.json.tmp
