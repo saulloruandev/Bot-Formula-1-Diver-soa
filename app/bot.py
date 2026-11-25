@@ -1070,9 +1070,10 @@ class SkillSelect(discord.ui.Select):
 
 class SkillView(discord.ui.View):
     def __init__(self, race, user_id):
-        super().__init__(timeout=180)
-        for attribute, label, emoji in SKILL_FIELDS:
-            self.add_item(SkillSelect(race, user_id, attribute, label, emoji))
+        super().__init__(timeout=60)
+        self.race = race
+        self.user_id = user_id
+        self.add_item(discord.ui.Button(label="Distribuir pelo perfil", style=discord.ButtonStyle.primary, disabled=True))
 
 
 class TireSelect(discord.ui.Select):
@@ -1146,7 +1147,8 @@ class LobbyView(discord.ui.View):
     async def configure(self, interaction, button):
         if not self.active(interaction) or interaction.user.id not in self.race.drivers:
             return await interaction.response.send_message("Entre no lobby antes.", ephemeral=True)
-        await interaction.response.send_message(f"Distribua exatamente {SKILL_POINTS} pontos.", view=SkillView(self.race, interaction.user.id), ephemeral=True)
+        modal = ProfileSkillsModal(interaction.user.id)
+        await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Escolher pneus", emoji="🛞", style=discord.ButtonStyle.secondary, row=0)
     async def tires(self, interaction, button):
@@ -1319,6 +1321,8 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     tire_condition = max(0.60, 1.0 - driver.tire_wear / 160.0)
     tire_loss = max(0.0, 1.0 - tire_mult) * (base * 0.12)
     weather_loss = rain * (base * 0.08)
+    if driver.ability == "Rei da Chuva":
+        weather_loss *= 0.90
     mode_adjustment = mode["pace"]
 
     # Energia de jogo substitui um uso simplificado da gestão elétrica:
@@ -1359,6 +1363,10 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     risk += (driver.tire_wear / 100) * 0.20 + (driver.car_damage / 100) * 0.12
     risk += curve_intensity * max(0, 5 - driver.effective_skill("curves")) * 0.012
     risk += curve_intensity * max(0, 5 - driver.effective_skill("control")) * 0.014
+    if driver.ability == "Mãos de Cirurgião":
+        risk -= 0.008
+    if driver.ability == "Sangue Frio" and action["mode"] == "aggressive":
+        risk -= 0.006
     risk += max(0, -mode["pace"]) * 0.30  # agressividade/ação rápida
     risk = max(0.008, min(0.52, risk))
 
@@ -1384,6 +1392,9 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
 
     # Desgaste progride em cada segmento e afeta ritmo nos segmentos futuros.
     wear_increment = TIRES[driver.tire]["wear"] * (0.75 if segment == "reta" else 1.15)
+    wear_increment *= max(0.75, 1.0 - driver.effective_skill("tyre_management") * 0.025)
+    if driver.ability == "Mestre dos Pneus":
+        wear_increment *= 0.90
     if action["mode"] == "aggressive":
         wear_increment *= 1.20
     if action["mode"] == "safe":
@@ -1583,6 +1594,7 @@ async def run_race(race):
     circuit = CIRCUITS[race.circuit_name]
     for lap in range(1, race.total_laps + 1):
         race.current_lap = lap
+        lap_start_times = {d.user.id: d.total_time for d in race.drivers.values()}
         lap_events = []
         for segment_index, segment in enumerate(circuit["segments"], 1):
             race.current_segment = segment_index
@@ -1639,8 +1651,12 @@ async def run_race(race):
                 if action.get("attack") and prior_gap is not None and prior_gap <= OVERTAKE_DETECTION_SECONDS:
                     mode = DRIVING_MODES[action.get("mode", "normal")]
                     chance = 0.22 + driver.effective_skill("straights") * 0.025 + driver.effective_skill("acceleration") * 0.018 + driver.effective_skill("control") * 0.008
+                    if driver.ability in ("Ultrapassador Nato", "Especialista em DRS"):
+                        chance += 0.035
                     chance += mode["attack"]
                     chance -= ahead.control * 0.012
+                    if ahead.ability == "Defensor Nato":
+                        chance -= 0.035
                     chance = max(0.08, min(0.68, chance))
                     if random.random() < chance and driver.total_time > ahead.total_time:
                         # Overtake representa uma vantagem marginal no tempo do segmento,
@@ -1658,12 +1674,14 @@ async def run_race(race):
         # Final da volta: contabilizar volta e checar chegada ao fim da volta 10.
         for driver in race.drivers.values():
             if not driver.finished:
-                driver.last_lap_time = sum([]) if False else driver.last_lap_time
+                driver.last_lap_time = driver.total_time - lap_start_times.get(driver.user.id, driver.total_time)
                 if lap == race.total_laps:
                     driver.finished = True
         await asyncio.sleep(0.5)
 
     final_order = current_order(race)
+    fastest = min((d for d in final_order if d.last_lap_time > 0 and not d.retired), key=lambda d: d.last_lap_time, default=None)
+    await register_championship_result(race, final_order, fastest)
     podium = "\n".join(
         f"**P{position} — {driver_display_name(driver)}** | Tempo acumulado: `{format_time(driver.total_time)}` | "
         f"Pneu: {TIRES[driver.tire]['label']} | desgaste {driver.tire_wear:.0f}%"
@@ -2025,6 +2043,145 @@ async def equipar_estilo(interaction: discord.Interaction,estilo: str):
     await interaction.response.send_message(note, ephemeral=True)
 
 
+
+# Campeonato persistente (uma temporada ativa por servidor).
+CHAMPIONSHIP_FILE = Path(__file__).with_name("campeonato.json")
+CHAMPIONSHIP_POINTS = {1: 10, 2: 7, 3: 5, 4: 3, 5: 1}
+
+def load_championship():
+    try:
+        if CHAMPIONSHIP_FILE.exists():
+            data = json.loads(CHAMPIONSHIP_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {"seasons": {}, "active": {}}
+
+CHAMPIONSHIP = load_championship()
+
+def save_championship():
+    CHAMPIONSHIP_FILE.write_text(json.dumps(CHAMPIONSHIP, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def season_for(guild_id):
+    season_id = CHAMPIONSHIP.get("active", {}).get(str(guild_id))
+    return CHAMPIONSHIP.get("seasons", {}).get(season_id) if season_id else None
+
+async def register_championship_result(race, order, fastest):
+    season = season_for(race.guild_id)
+    if not season:
+        return
+    race_id = f"{race.guild_id}-{int(__import__('time').time())}-{race.channel_id}"
+    if any(item.get("race_id") == race_id for item in season.get("races", [])):
+        return
+    results = []
+    for position, driver in enumerate(order, 1):
+        results.append({
+            "user_id": str(driver.user.id),
+            "name": driver_display_name(driver),
+            "position": position,
+            "retired": bool(driver.retired),
+            "fastest_lap": bool(fastest and fastest.user.id == driver.user.id),
+            "lap_time": driver.last_lap_time,
+        })
+    season.setdefault("races", []).append({
+        "race_id": race_id, "circuit": race.circuit_name,
+        "date": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+        "results": results,
+    })
+    save_championship()
+
+def championship_table(season):
+    table = {}
+    for race_data in season.get("races", []):
+        results = race_data.get("results", [])
+        for result in results:
+            uid = result["user_id"]
+            row = table.setdefault(uid, {"name": result["name"], "points": 0, "wins": 0, "seconds": 0, "thirds": 0, "fastest": 0, "races": 0})
+            row["races"] += 1
+            pos = result["position"]
+            if not result.get("retired"):
+                row["points"] += CHAMPIONSHIP_POINTS.get(pos, 0)
+                row["wins"] += pos == 1
+                row["seconds"] += pos == 2
+                row["thirds"] += pos == 3
+                if result.get("fastest_lap") and pos <= 3:
+                    row["points"] += 1
+                    row["fastest"] += 1
+    return sorted(table.values(), key=lambda x: (x["points"], x["wins"], x["seconds"], x["thirds"], x["fastest"]), reverse=True)
+
+@bot.command(name="campeonato")
+async def championship_command(ctx):
+    season = season_for(ctx.guild.id if ctx.guild else 0)
+    if not season:
+        return await ctx.send("Não existe temporada ativa. Um administrador pode usar `!iniciartemporada nome`.")
+    rows = championship_table(season)
+    text_rows = [f"**P{i} — {r['name']}** • {r['points']} pts | {r['wins']}V {r['seconds']}S {r['thirds']}T | {r['fastest']} VR" for i, r in enumerate(rows, 1)]
+    embed = discord.Embed(title=f"🏆 Campeonato — {season['name']}", description="\n".join(text_rows) or "Nenhuma corrida registrada.", color=discord.Color.gold())
+    embed.set_footer(text=f"Etapas concluídas: {len(season.get('races', []))}")
+    await ctx.send(embed=embed)
+
+@bot.command(name="ranking")
+async def ranking_command(ctx):
+    await championship_command(ctx)
+
+@bot.command(name="temporada")
+async def season_command(ctx):
+    season = season_for(ctx.guild.id if ctx.guild else 0)
+    if not season:
+        return await ctx.send("Nenhuma temporada ativa.")
+    await ctx.send(f"🏁 **{season['name']}** — {len(season.get('races', []))} etapa(s) registrada(s).")
+
+@bot.command(name="resultado")
+async def result_command(ctx):
+    season = season_for(ctx.guild.id if ctx.guild else 0)
+    if not season or not season.get("races"):
+        return await ctx.send("Ainda não há resultados registrados.")
+    latest = season["races"][-1]
+    lines = [f"**P{r['position']}** {r['name']}" + (" — ⛔ Abandonou" if r.get("retired") else "") + (" • 🟣 Volta mais rápida" if r.get("fastest_lap") else "") for r in latest["results"]]
+    await ctx.send(embed=discord.Embed(title=f"Resultado — {latest['circuit']}", description="\n".join(lines), color=discord.Color.gold()))
+
+@bot.command(name="estatisticas")
+async def statistics_command(ctx):
+    season = season_for(ctx.guild.id if ctx.guild else 0)
+    if not season:
+        return await ctx.send("Nenhuma temporada ativa.")
+    rows = championship_table(season)
+    if not rows:
+        return await ctx.send("Ainda não há estatísticas.")
+    r = next((x for x in rows if x["name"] == (ctx.author.display_name)), rows[0])
+    await ctx.send(f"📊 **{r['name']}** — {r['points']} pontos, {r['wins']} vitória(s), {r['fastest']} volta(s) mais rápida(s), {r['races']} corrida(s).")
+
+@bot.command(name="iniciartemporada")
+@commands.has_permissions(administrator=True)
+async def start_season_command(ctx, *, name="Temporada"):
+    gid = str(ctx.guild.id)
+    season_id = f"{gid}-{int(__import__('time').time())}"
+    CHAMPIONSHIP["seasons"][season_id] = {"name": name, "guild_id": gid, "races": []}
+    CHAMPIONSHIP["active"][gid] = season_id
+    save_championship()
+    await ctx.send(f"🏆 Temporada **{name}** iniciada!")
+
+@bot.command(name="finalizartemporada")
+@commands.has_permissions(administrator=True)
+async def finish_season_command(ctx):
+    gid = str(ctx.guild.id)
+    if gid not in CHAMPIONSHIP.get("active", {}):
+        return await ctx.send("Não existe temporada ativa.")
+    CHAMPIONSHIP["active"].pop(gid, None)
+    save_championship()
+    await ctx.send("🏁 Temporada finalizada. O histórico foi preservado.")
+
+@bot.command(name="resetcampeonato")
+@commands.has_permissions(administrator=True)
+async def reset_championship_command(ctx):
+    gid = str(ctx.guild.id)
+    season = season_for(ctx.guild.id)
+    if not season:
+        return await ctx.send("Não existe temporada ativa.")
+    season["races"] = []
+    save_championship()
+    await ctx.send("♻️ Resultados da temporada ativa foram reiniciados.")
 
 @bot.command(name="comandos")
 async def commands_list(ctx):
