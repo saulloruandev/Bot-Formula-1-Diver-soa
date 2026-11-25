@@ -1393,8 +1393,6 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     risk += max(0, -mode["pace"]) * 0.30  # agressividade/ação rápida
     risk = max(0.008, min(0.52, risk))
 
-    if driver.ability == "Mãos de Cirurgião":
-        risk = max(0.005, risk - 0.008)
     if random.random() < risk:
         severity = random.random()
         if severity < 0.68:
@@ -2163,7 +2161,7 @@ def championship_table(season):
         results = race_data.get("results", [])
         for result in results:
             uid = result["user_id"]
-            row = table.setdefault(uid, {"name": result["name"], "points": 0, "wins": 0, "seconds": 0, "thirds": 0, "fastest": 0, "races": 0})
+            row = table.setdefault(uid, {"user_id": uid, "name": result["name"], "points": 0, "wins": 0, "seconds": 0, "thirds": 0, "fastest": 0, "races": 0})
             row["races"] += 1
             pos = result["position"]
             if not result.get("retired"):
@@ -2215,7 +2213,9 @@ async def statistics_command(ctx):
     rows = championship_table(season)
     if not rows:
         return await ctx.send("Ainda não há estatísticas.")
-    r = next((x for x in rows if x["name"] == (ctx.author.display_name)), rows[0])
+    r = next((x for x in rows if x["user_id"] == str(ctx.author.id)), None)
+    if not r:
+        return await ctx.send("Você ainda não participou de uma corrida desta temporada.")
     await ctx.send(f"📊 **{r['name']}** — {r['points']} pontos, {r['wins']} vitória(s), {r['fastest']} volta(s) mais rápida(s), {r['races']} corrida(s).")
 
 @bot.command(name="iniciartemporada")
@@ -2256,7 +2256,8 @@ async def commands_list(ctx):
         "`!f1` — cria um lobby; o host usa os botões do próprio painel para configurar, classificar e iniciar.\n"
         "`!perfil` — configura nome, idade, equipe, foto, estilo e inventário.\n`!roll-estilo` — roleta gacha de estilos de pilotos F1.\n`!roll-pendente` — recupera resultado aguardando confirmação.\n`!loja` — loja visual de giros (sonhos da Loritta; confirmação manual).\n`!colecao-estilos` — mostra estilos obtidos.\n`/adicionar_giros`, `/deletar_giros`, `/setar_estilo` e `/gamepass` — administração de giros/estilos.\n"
         "`!ajuda` — guia de funcionamento e explicação das estratégias.\n"
-        "`!campeonato` / `!ranking` / `!estatisticas` — classificação e dados da temporada.\n"
+        "`!campeonato` / `!ranking` / `!estatisticas` / `!temporada` / `!resultado` — consultar campeonato, etapa e desempenho.\n"
+        "`!iniciartemporada` / `!finalizartemporada` / `!resetcampeonato` — gestão de temporada (administradores).\n"
         "`!comandos` — exibe esta lista.\n"
         "`!f1status` — mostra estado do lobby/corrida.\n"
         "`!f1cancel` — cancela lobby/corrida (somente host).\n\n"
@@ -2270,7 +2271,7 @@ async def help_f1(ctx):
     embed = discord.Embed(title="📘 Guia de corrida — F1 Discord Racing", color=discord.Color.green())
     embed.description = (
         "**1) Criar e entrar:** use `!f1`. Pilotos clicam Entrar na corrida, configuram o carro e os pneus, e marcam Estou pronto.\n"
-        "**2) Perfil/crachá:** `!perfil` mostra estilo equipado, cargo, dados pessoais e botões Configurar/Inventário.\n**3) Gacha:** `!roll-estilo` permite gastar giros para obter estilos de pilotos. `!loja` mostra pacotes em sonhos; a compra é confirmada manualmente e o bot não desconta sonhos. `!colecao-estilos` lista os estilos recebidos. Os estilos têm raridades e pontos extras próprios. Nome aparece na corrida; equipe e pneu favorito são visuais, sem impacto na simulação. Perfil salvo é carregado no próximo lobby; os pontos ainda podem ser ajustados.\n"
+        "**2) Perfil/crachá:** `!perfil` mostra estilo equipado, cargo, dados pessoais e botões Configurar/Inventário.\n**3) Gacha:** `!roll-estilo` permite gastar giros para obter estilos de pilotos. `!loja` mostra pacotes em sonhos; a compra é confirmada manualmente e o bot não desconta sonhos. `!colecao-estilos` lista os estilos recebidos. Os estilos têm raridades e pontos extras próprios. Nome aparece na corrida; equipe e pneu favorito são visuais, sem impacto na simulação. Perfil salvo é carregado no próximo lobby; os pontos pessoais só podem ser distribuídos uma vez e depois ficam bloqueados.\n"
         "**4) Classificação:** o host clica Iniciar classificação no painel do lobby. A classificação usa habilidades, pneus, clima e uma variação aleatória moderada para definir o grid.\n"
         "**5) Corrida:** o host clica Iniciar corrida no painel de classificação. Cada volta é dividida em quatro trechos de reta/curva. Em cada trecho, todos escolhem pelos mesmos botões públicos; a escolha fica oculta até todos confirmarem. O prazo é 45 segundos (ou o valor configurado); quem não decidir recebe Seguro.\n\n"
         "**AÇÕES DE PILOTAGEM**\n"
@@ -2284,7 +2285,9 @@ async def help_f1(ctx):
         "• Gerenciamento de pneus reduz desgaste; Curvas melhora trechos técnicos; Velocidade favorece retas e ultrapassagens; Classificação melhora o grid; Motor ajuda na aceleração; Controle reduz riscos. Os 10 pontos pessoais ficam bloqueados após a primeira distribuição.\n"
         "• Soft: rápido, mas desgasta muito. Medium: equilíbrio. Hard: menos aderência, maior durabilidade. Intermediate: indicado para pista úmida. Wet: melhor para chuva forte, mas fraco em pista seca. Pneus inadequados prejudicam o ritmo.\n"
         "• O desgaste reduz a condição do pneu ao longo dos segmentos. A energia é limitada e pode ser recuperada um pouco com Normal/Seguro. Clima chuvoso aumenta a perda de ritmo e o risco.\n"
-        "• Erros e derrapagens são eventos probabilísticos; Controle, Frenagem, modo escolhido, chuva e desgaste influenciam o risco.\n\n"
+        "• Erros e derrapagens são eventos probabilísticos; Controle, modo escolhido, chuva e desgaste influenciam o risco.\n"
+        "• Habilidades especiais são sorteadas uma única vez por piloto e funcionam separadamente dos atributos e dos estilos do gacha.\n"
+        "• Campeonato: 1º 10 pts, 2º 7, 3º 5, 4º 3, 5º 1; volta mais rápida vale +1 se o piloto terminar no top 3. Abandono não pontua.\n\n"
         "**Botões de gestão:** Configurar corrida permite ao host escolher voltas, circuito, clima e prazo de decisão. Iniciar classificação e Iniciar corrida avançam o fluxo sem comandos separados."
     )
     embed.set_footer(text="As mecânicas são uma simulação simplificada e não reproduzem integralmente as regras oficiais da F1.")
