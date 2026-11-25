@@ -1160,6 +1160,9 @@ class LobbyView(discord.ui.View):
     async def configure(self, interaction, button):
         if not self.active(interaction) or interaction.user.id not in self.race.drivers:
             return await interaction.response.send_message("Entre no lobby antes.", ephemeral=True)
+        profile = gacha_profile(interaction.user.id)
+        if profile.get("skills_locked"):
+            return await interaction.response.send_message("Seus atributos já foram definidos e estão bloqueados.", ephemeral=True)
         modal = ProfileSkillsModal(interaction.user.id)
         await interaction.response.send_modal(modal)
 
@@ -1213,8 +1216,9 @@ def calculate_qualifying_time(driver, race):
     rain = WEATHER[race.weather_name]["rain"]
     weighted = (
         driver.effective_skill("curves") * circuit["corners"] + driver.effective_skill("straights") * circuit["straights"]
-        + driver.effective_skill("braking") * circuit["braking"] + driver.effective_skill("acceleration") * circuit["acceleration"]
+        + driver.effective_skill("engine") * circuit["acceleration"]
         + driver.effective_skill("control") * circuit["control"]
+        + driver.effective_skill("qualifying") * 0.08
     )
     skill_delta = weighted - 4.0
     tire_delta = (tire_weather_multiplier(driver.tire, rain) - 1.0) * 2.8
@@ -1320,7 +1324,7 @@ def skill_segment_bonus(driver, segment):
         # Reta e aceleração predominam; reta impacta a velocidade média.
         return driver.effective_skill("straights") * 0.055 + driver.effective_skill("acceleration") * 0.035
     # Curva, frenagem e controle fazem diferença na zona técnica.
-    return driver.effective_skill("curves") * 0.055 + driver.effective_skill("braking") * 0.035 + driver.effective_skill("control") * 0.045
+    return driver.effective_skill("curves") * 0.065 + driver.effective_skill("control") * 0.045
 
 
 def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opponent=None):
@@ -2275,7 +2279,7 @@ async def help_f1(ctx):
         "↗️ **Overtake Mode:** seleciona uma tentativa de ultrapassagem. Só é elegível se houver um carro imediatamente à frente dentro da janela de 1,0 segundo e energia suficiente (12). Gasta energia; chance depende da diferença, atributos e fatores aleatórios. Não garante ultrapassar. Se estiver fora da janela/sem energia, a tentativa aplica penalidade.\n"
         "⚡ **Boost Mode:** usa 15 de energia para ganhar ritmo no trecho. Se não houver energia suficiente, não ativa e a simulação aplica uma penalidade leve.\n\n"
         "**CARRO, PNEUS E CONDIÇÕES**\n"
-        "• Os 10 pontos são distribuídos entre Gerenciamento de pneus, Curvas, Velocidade, Classificação, Motor e Controle.\n"
+        "• Gerenciamento de pneus reduz desgaste; Curvas melhora trechos técnicos; Velocidade favorece retas e ultrapassagens; Classificação melhora o grid; Motor ajuda na aceleração; Controle reduz riscos. Os 10 pontos pessoais ficam bloqueados após a primeira distribuição.\n"
         "• Soft: rápido, mas desgasta muito. Medium: equilíbrio. Hard: menos aderência, maior durabilidade. Intermediate: indicado para pista úmida. Wet: melhor para chuva forte, mas fraco em pista seca. Pneus inadequados prejudicam o ritmo.\n"
         "• O desgaste reduz a condição do pneu ao longo dos segmentos. A energia é limitada e pode ser recuperada um pouco com Normal/Seguro. Clima chuvoso aumenta a perda de ritmo e o risco.\n"
         "• Erros e derrapagens são eventos probabilísticos; Controle, Frenagem, modo escolhido, chuva e desgaste influenciam o risco.\n\n"
