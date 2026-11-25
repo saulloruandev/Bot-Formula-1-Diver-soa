@@ -1517,8 +1517,12 @@ def standings_embed(race, lap, segment_label, events):
         description="\n".join(lines),
         color=discord.Color.blue(),
     )
+    embed.add_field(name="🌦️ Condições da pista", value=f"**{race.weather_name}** • {race.surface} • Ambiente {race.ambient_temp}°C • Pista {race.track_temp}°C", inline=False)
     if events:
-        embed.add_field(name="📺 Transmissão — acontecimentos da volta", value="\n".join(events[-12:]), inline=False)
+        event_text = "\n".join(events[-12:])
+        if len(event_text) > 1000:
+            event_text = event_text[:997] + "..."
+        embed.add_field(name="📺 Transmissão — acontecimentos da volta", value=event_text, inline=False)
     return embed
 
 
