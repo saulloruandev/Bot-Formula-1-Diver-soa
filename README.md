@@ -39,7 +39,7 @@ F1_Discord_Racing/
 
 Os dez pontos pessoais são distribuídos entre seis atributos: Gerenciamento de pneus, Curvas, Velocidade, Classificação, Motor e Controle. Após a primeira distribuição, os pontos ficam bloqueados. A habilidade especial é sorteada separadamente e não pode ser trocada por comando.
 
-Os estilos do gacha mantêm suas raridades, chances e bônus atuais. Os bônus antigos são compatibilizados com os atributos novos sem alterar a tabela de raridades.
+Os estilos do gacha mantêm as chances originais de raridade e agora distribuem bônus em seis atributos, incluindo gerenciamento de pneus. Cada raridade recebeu +1 ponto em relação à tabela anterior, e estilos comuns/incomuns podem ter atributos zerados para representar fraquezas reais. Membros podem transferir giros de estilo com `!transferir-giros @membro quantidade`. Habilidades podem ser sorteadas com `!roll-habilidade`; cada giro custa 25k sonhos e é liberado manualmente pelo administrador após pagamento.
 
 ## Campeonato
 
@@ -58,7 +58,7 @@ As imagens ficam em `app/assets/eventos/`, separadas por acontecimento. Adicione
 
 ## Central de informações
 
-Use `!sistema` no Discord para abrir o painel interativo com informações sobre estilos e bônus, pneus e clima, habilidades especiais, atributos, pilotagem e novidades do bot.
+Use `!sistema` no Discord para abrir o painel interativo com informações sobre estilos e bônus, pneus e clima, habilidades especiais, atributos, pilotagem e novidades do bot. `!perfil @membro` consulta o perfil de outro piloto.
 
 
 ## Persistência dos perfis dos jogadores
