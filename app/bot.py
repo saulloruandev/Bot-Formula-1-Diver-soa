@@ -1615,31 +1615,53 @@ def reveal_decisions_embed(race, active, segment_title, events):
 
 
 EVENT_ASSET_DIR = Path(__file__).parent / "assets" / "eventos"
+EVENT_LINKS_FILE = EVENT_ASSET_DIR / "links.json"
 EVENT_IMAGE_RULES = {
-    "ultrapassagem": ("ultrapassagem.png", "↗️"),
-    "acidente": ("colisao.png", "💥"),
-    "derrapagem": ("rodada.png", "🌀"),
-    "ESTOURO DE PNEU": ("pneu.png", "🛞"),
-    "Abandono": ("abandono.png", "⛔"),
-    "Safety Car": ("safety_car.png", "🚨"),
-    "bandeira vermelha": ("bandeira_vermelha.png", "🟥"),
-    "volta mais rápida": ("volta_rapida.png", "⏱️"),
+    "ultrapassagem": ("ultrapassagem", "↗️"),
+    "acidente": ("colisao", "💥"),
+    "derrapagem": ("rodada", "🌀"),
+    "ESTOURO DE PNEU": ("pneu_estourado", "🛞"),
+    "Abandono": ("quebra_motor", "⛔"),
+    "Safety Car": ("safety_car", "🚨"),
+    "bandeira vermelha": ("bandeira_vermelha", "🟥"),
+    "volta mais rápida": ("volta_rapida", "⏱️"),
 }
+
+def event_image_links():
+    try:
+        data = json.loads(EVENT_LINKS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 async def publish_important_event(race, message):
     lower = message.lower()
-    for keyword, (filename, emoji) in EVENT_IMAGE_RULES.items():
-        if keyword.lower() in lower:
-            asset = EVENT_ASSET_DIR / filename
-            if asset.exists():
-                try:
-                    file = discord.File(asset, filename=filename)
-                    embed = discord.Embed(description=message, color=discord.Color.orange())
-                    embed.set_image(url=f"attachment://{filename}")
-                    await race.channel.send(content=emoji, embed=embed, file=file)
-                except discord.HTTPException:
-                    pass
-            return
+    for keyword, (event_folder, emoji) in EVENT_IMAGE_RULES.items():
+        if keyword.lower() not in lower:
+            continue
+        folder = EVENT_ASSET_DIR / event_folder
+        local_images = []
+        if folder.exists():
+            local_images = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}]
+        links = event_image_links().get(event_folder, [])
+        if isinstance(links, str):
+            links = [links]
+        links = [url for url in links if isinstance(url, str) and url.startswith(("https://", "http://"))]
+        try:
+            embed = discord.Embed(description=message, color=discord.Color.orange())
+            if local_images:
+                asset = random.choice(local_images)
+                file = discord.File(asset, filename=asset.name)
+                embed.set_image(url=f"attachment://{asset.name}")
+                await race.channel.send(content=emoji, embed=embed, file=file)
+            elif links:
+                embed.set_image(url=random.choice(links))
+                await race.channel.send(content=emoji, embed=embed)
+            else:
+                await race.channel.send(content=f"{emoji} {message}")
+        except discord.HTTPException:
+            pass
+        return
 
 async def run_race(race):
     race.race_started = True
@@ -2255,6 +2277,72 @@ async def reset_championship_command(ctx):
     save_championship()
     await ctx.send("♻️ Resultados da temporada ativa foram reiniciados.")
 
+SYSTEM_PAGES = ("estilos", "pneus", "habilidades", "pilotagem", "novidades")
+
+def system_embed(page):
+    if page == "estilos":
+        rarity_lines = [f"{data['emoji']} **{rarity}** — {data['points']} pontos extras • chance {data['chance']}%" for rarity, data in RARITY_DATA.items()]
+        stat_labels = {"curves":"CUR","straights":"RET","braking":"CLA","acceleration":"MOT","control":"CTL"}
+        style_lines = []
+        for style in PILOT_STYLES:
+            vals = " ".join(f"{stat_labels[k]}+{v}" for k, v in style.get("skills", {}).items() if v)
+            style_lines.append(f"• **{style['name']}** ({style['rarity']}): {vals or 'sem bônus'}")
+        description = "**Raridades e pontos extras**\n" + "\n".join(rarity_lines)
+        description += "\n\n**Como ler os bônus**\nCUR = Curvas • RET = Velocidade em retas • CLA = Classificação/frenagem • MOT = Motor/aceleração • CTL = Controle. Os bônus são somados aos atributos pessoais durante a corrida."
+        description += "\n\n**Estilos disponíveis**\n" + "\n".join(style_lines)
+        if len(description) > 4000:
+            description = description[:3900] + "\n… (catálogo completo permanece no código/coleção de estilos)."
+        return discord.Embed(title="🎭 Sistema de estilos", description=description, color=discord.Color.purple())
+    if page == "pneus":
+        lines = []
+        for key, tire in TIRES.items():
+            lines.append(f"**{tire['label']}**\nAderência: {tire['grip']:.2f} • Desgaste: {tire['wear']:.2f}\nSeca: {tire['dry']:.2f} • Úmida: {tire['damp']:.2f} • Molhada: {tire['wet']:.2f}")
+        return discord.Embed(title="🛞 Pneus e clima", description="O composto escolhido altera aderência, ritmo e desgaste. Escolha conforme a condição da pista.\n\n" + "\n\n".join(lines), color=discord.Color.orange())
+    if page == "habilidades":
+        lines = [f"✨ **{name}** — {description}" for name, description in ABILITY_CATALOG.items()]
+        return discord.Embed(title="✨ Habilidades especiais", description="Cada piloto recebe uma habilidade passiva sorteada uma única vez. Não existe comando para rerrolar.\n\n" + "\n".join(lines), color=discord.Color.gold())
+    if page == "pilotagem":
+        mode_lines = [f"**{data['label']}** — ritmo {data['pace']:+.2f} • risco {data['risk']:+.2f} • defesa {data['defense']:+.2f} • ataque {data['attack']:+.2f}" for data in DRIVING_MODES.values()]
+        skill_lines = [f"{emoji} **{label}** — atributo pessoal; os 10 pontos são distribuídos uma vez e ficam bloqueados." for key, label, emoji in SKILL_FIELDS]
+        description = "**Atributos**\n" + "\n".join(skill_lines)
+        description += "\n\n**Modos de pilotagem**\n" + "\n".join(mode_lines)
+        description += "\n\n**Ações adicionais**\n• Overtake Mode: tenta ultrapassar quando há adversário elegível à frente.\n• Boost Mode: usa energia para buscar ritmo extra.\n• Decisões são privadas até todos os pilotos confirmarem."
+        return discord.Embed(title="🏎️ Atributos e pilotagem", description=description, color=discord.Color.blue())
+    description = (
+        "**Novidades desta versão**\n"
+        "• Seis atributos pessoais: gerenciamento de pneus, curvas, velocidade, classificação, motor e controle.\n"
+        "• Distribuição fixa de 10 pontos por piloto.\n"
+        "• Habilidade especial passiva sorteada uma única vez.\n"
+        "• Campeonato com pontuação, histórico, ranking e estatísticas persistentes.\n"
+        "• Pontos do campeonato: 10 / 7 / 5 / 3 / 1; +1 pela volta mais rápida se terminar no top 3.\n"
+        "• Imagens de eventos configuráveis por pastas e links, com seleção aleatória.\n"
+        "• Circuitos, clima, pneus, desgaste, energia e decisões estratégicas influenciam a simulação.\n\n"
+        "**Comandos úteis**\n"
+        "f1 criar lobby • perfil ver piloto • roll-estilo girar estilo • campeonato consultar temporada • ranking ver classificação."
+    )
+    return discord.Embed(title="🆕 Novidades e sistemas", description=description, color=discord.Color.green())
+
+class SystemView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+    async def show(self, interaction, page):
+        await interaction.response.edit_message(embed=system_embed(page), view=self)
+    @discord.ui.button(label="Estilos", emoji="🎭", style=discord.ButtonStyle.primary, row=0)
+    async def styles(self, interaction, button): await self.show(interaction, "estilos")
+    @discord.ui.button(label="Pneus", emoji="🛞", style=discord.ButtonStyle.secondary, row=0)
+    async def tires(self, interaction, button): await self.show(interaction, "pneus")
+    @discord.ui.button(label="Habilidades", emoji="✨", style=discord.ButtonStyle.secondary, row=0)
+    async def abilities(self, interaction, button): await self.show(interaction, "habilidades")
+    @discord.ui.button(label="Atributos e pilotagem", emoji="🏎️", style=discord.ButtonStyle.secondary, row=1)
+    async def driving(self, interaction, button): await self.show(interaction, "pilotagem")
+    @discord.ui.button(label="Novidades", emoji="🆕", style=discord.ButtonStyle.success, row=1)
+    async def news(self, interaction, button): await self.show(interaction, "novidades")
+
+@bot.command(name="sistema")
+async def system_command(ctx):
+    await ctx.send(embed=system_embed("novidades"), view=SystemView())
+
+
 @bot.command(name="comandos")
 async def commands_list(ctx):
     embed = discord.Embed(title="📜 Comandos do F1 Discord Racing", color=discord.Color.blue())
@@ -2264,6 +2352,7 @@ async def commands_list(ctx):
         "`!ajuda` — guia de funcionamento e explicação das estratégias.\n"
         "`!campeonato` / `!ranking` / `!estatisticas` / `!temporada` / `!resultado` — consultar campeonato, etapa e desempenho.\n"
         "`!iniciartemporada` / `!finalizartemporada` / `!resetcampeonato` — gestão de temporada (administradores).\n"
+        "`!sistema` — painel interativo com explicações de estilos, pneus, habilidades, atributos e novidades.\n"
         "`!comandos` — exibe esta lista.\n"
         "`!f1status` — mostra estado do lobby/corrida.\n"
         "`!f1cancel` — cancela lobby/corrida (somente host).\n\n"
@@ -2411,7 +2500,7 @@ async def on_ready():
         print(f"Slash commands sincronizados: {len(synced)}")
     except Exception as exc:
         print(f"Falha ao sincronizar slash commands: {exc}")
-    print("Comandos: !f1, !perfil, !roll-estilo, !loja, !comandos, !ajuda, !f1status, !f1cancel")
+    print("Comandos: !f1, !perfil, !roll-estilo, !loja, !sistema, !comandos, !ajuda, !f1status, !f1cancel")
 
 
 @bot.event
