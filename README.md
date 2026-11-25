@@ -58,7 +58,7 @@ As imagens ficam em `app/assets/eventos/`, separadas por acontecimento. Adicione
 
 ## Central de informações
 
-Use `!sistema` no Discord para abrir o painel interativo com informações sobre estilos e bônus, pneus e clima, habilidades especiais, atributos, pilotagem e novidades do bot. `!perfil @membro` consulta o perfil de outro piloto.
+Use `!sistema` no Discord para abrir o painel interativo com informações sobre estilos e bônus, pneus e clima, habilidades especiais, atributos, pilotagem e novidades do bot. `!perfil @membro` consulta o perfil de outro piloto. `!perfil @membro` consulta o perfil de outro piloto.
 
 
 ## Persistência dos perfis dos jogadores
