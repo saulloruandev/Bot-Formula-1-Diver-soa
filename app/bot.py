@@ -340,7 +340,10 @@ for _profile in USER_PROFILES.values():
     if isinstance(_profile, dict):
         _profile["skills"] = migrate_skill_distribution(_profile.get("skills"))
         _profile.setdefault("ability", random.choice(list(ABILITY_CATALOG)))
-save_profiles_if_needed = False
+try:
+    PROFILE_FILE.write_text(json.dumps(USER_PROFILES, ensure_ascii=False, indent=2), encoding="utf-8")
+except OSError:
+    pass
 
 # Gacha de estilos: loja apenas visual; confirmação de compra não consulta a Loritta.
 RARITY_DATA = {
@@ -1317,6 +1320,10 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     base = segment_base_time(segment, circuit)
 
     skill_bonus = skill_segment_bonus(driver, segment)
+    if driver.ability == "Largada Explosiva" and race.current_lap == 1:
+        skill_bonus += base * 0.006
+    if driver.ability == "Última Volta" and race.current_lap == race.total_laps:
+        skill_bonus += base * 0.006
     tire_mult = tire_weather_multiplier(driver.tire, rain)
     tire_condition = max(0.60, 1.0 - driver.tire_wear / 160.0)
     tire_loss = max(0.0, 1.0 - tire_mult) * (base * 0.12)
@@ -1370,6 +1377,8 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     risk += max(0, -mode["pace"]) * 0.30  # agressividade/ação rápida
     risk = max(0.008, min(0.52, risk))
 
+    if driver.ability == "Mãos de Cirurgião":
+        risk = max(0.005, risk - 0.008)
     if random.random() < risk:
         severity = random.random()
         if severity < 0.68:
@@ -1395,6 +1404,8 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     wear_increment *= max(0.75, 1.0 - driver.effective_skill("tyre_management") * 0.025)
     if driver.ability == "Mestre dos Pneus":
         wear_increment *= 0.90
+    if driver.ability == "Pit Stop Perfeito" and race.current_lap == 1 and segment == "reta":
+        wear_increment *= 0.85
     if action["mode"] == "aggressive":
         wear_increment *= 1.20
     if action["mode"] == "safe":
@@ -1417,7 +1428,10 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
 
     # Recuperação pequena de energia em ritmo normal/seguro; manter tática como decisão.
     if not action["boost"] and not action["attack"]:
-        driver.energy = min(100.0, driver.energy + (2.0 if action["mode"] in ("normal", "safe") else 0.5))
+        recovery = 2.0 if action["mode"] in ("normal", "safe") else 0.5
+        if driver.ability == "Recuperação Rápida":
+            recovery += 0.5
+        driver.energy = min(100.0, driver.energy + recovery)
 
     return max(1.0, time), event
 
@@ -1582,6 +1596,33 @@ def reveal_decisions_embed(race, active, segment_title, events):
     return embed
 
 
+EVENT_ASSET_DIR = Path(__file__).parent / "assets" / "eventos"
+EVENT_IMAGE_RULES = {
+    "ultrapassagem": ("ultrapassagem.png", "↗️"),
+    "acidente": ("colisao.png", "💥"),
+    "derrapagem": ("rodada.png", "🌀"),
+    "ESTOURO DE PNEU": ("pneu.png", "🛞"),
+    "Abandono": ("quebra_motor.png", "🔧"),
+    "Safety Car": ("safety_car.png", "🚨"),
+    "bandeira vermelha": ("bandeira_vermelha.png", "🟥"),
+    "volta mais rápida": ("volta_rapida.png", "⏱️"),
+}
+
+async def publish_important_event(race, message):
+    lower = message.lower()
+    for keyword, (filename, emoji) in EVENT_IMAGE_RULES.items():
+        if keyword.lower() in lower:
+            asset = EVENT_ASSET_DIR / filename
+            if asset.exists():
+                try:
+                    file = discord.File(asset, filename=filename)
+                    embed = discord.Embed(description=message, color=discord.Color.orange())
+                    embed.set_image(url=f"attachment://{filename}")
+                    await race.channel.send(content=emoji, embed=embed, file=file)
+                except discord.HTTPException:
+                    pass
+            return
+
 async def run_race(race):
     race.race_started = True
     # Ordem de grid de qualificação; tempo acumulado inicial usa o qualifying como
@@ -1637,7 +1678,9 @@ async def run_race(race):
                 driver.total_time += segment_time
                 driver.distance += 1.0
                 if event:
-                    lap_events.append(f"{driver_display_name(driver)}: {event}")
+                    event_message = f"{driver_display_name(driver)}: {event}"
+                    lap_events.append(event_message)
+                    await publish_important_event(race, event_message)
 
             # Resolver oportunidade de ultrapassagem, sem garantia automática:
             # se acionou ataque, está na janela de distância e o delta do segmento favoreceu,
@@ -1662,7 +1705,9 @@ async def run_race(race):
                         # Overtake representa uma vantagem marginal no tempo do segmento,
                         # nunca uma posição concedida de forma garantida.
                         driver.total_time -= min(0.35, driver.total_time - ahead.total_time + 0.02)
-                        lap_events.append(f"↗️ {driver_display_name(driver)} completou uma ultrapassagem!")
+                        overtake_event = f"↗️ {driver_display_name(driver)} completou uma ultrapassagem!"
+                        lap_events.append(overtake_event)
+                        await publish_important_event(race, overtake_event)
                     else:
                         lap_events.append(f"🚥 {driver_display_name(driver)} tentou ultrapassar, mas não conseguiu.")
 
