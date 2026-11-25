@@ -2657,7 +2657,7 @@ async def help_f1(ctx):
         "• Soft: rápido, mas desgasta muito. Medium: equilíbrio. Hard: menos aderência, maior durabilidade. Intermediate: indicado para pista úmida. Wet: melhor para chuva forte, mas fraco em pista seca. Pneus inadequados prejudicam o ritmo.\n"
         "• O desgaste reduz a condição do pneu ao longo dos segmentos. A energia é limitada e pode ser recuperada um pouco com Normal/Seguro. Clima chuvoso aumenta a perda de ritmo e o risco.\n"
         "• Erros e derrapagens são eventos probabilísticos; Controle, modo escolhido, chuva e desgaste influenciam o risco.\n"
-        "• Habilidades especiais são sorteadas uma única vez por piloto e funcionam separadamente dos atributos e dos estilos do gacha.\n"
+        "• Habilidades especiais podem ser obtidas com `!roll-habilidade`; cada giro custa 25k sonhos e é liberado pelo administrador após pagamento. Use `!habilidade-pendente` se precisar recuperar um resultado interrompido.\n"
         "• Campeonato: 1º 10 pts, 2º 7, 3º 5, 4º 3, 5º 1; volta mais rápida vale +1 se o piloto terminar no top 3. Abandono não pontua.\n\n"
         "**Botões de gestão:** Configurar corrida permite ao host escolher voltas, circuito, clima e prazo de decisão. Iniciar classificação e Iniciar corrida avançam o fluxo sem comandos separados."
     )
