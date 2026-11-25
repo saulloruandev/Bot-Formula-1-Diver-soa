@@ -19,7 +19,7 @@ MAX_PLAYERS = 5
 TOTAL_LAPS = 10
 SKILL_POINTS = 10
 OVERTAKE_DETECTION_SECONDS = 1.0  # Ajuste para 1.5 para uma corrida mais casual
-SEGMENTS_PER_LAP = 4  # reta, curva, reta, curva
+SEGMENTS_PER_LAP = 6  # sequência própria por circuito
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -30,19 +30,19 @@ CIRCUITS = {
         "base_lap": 102.35,
         "corners": 0.28, "straights": 0.27, "braking": 0.18,
         "acceleration": 0.17, "control": 0.10,
-        "segments": ["reta", "curva", "reta", "curva"],
+        "segments": ["reta", "curva", "curva", "reta", "curva", "reta"],
     },
     "Monza": {
         "base_lap": 83.20,
         "corners": 0.15, "straights": 0.42, "braking": 0.20,
         "acceleration": 0.15, "control": 0.08,
-        "segments": ["reta", "curva", "reta", "curva"],
+        "segments": ["reta", "reta", "curva", "reta", "reta", "curva"],
     },
     "Silverstone": {
         "base_lap": 92.80,
         "corners": 0.34, "straights": 0.23, "braking": 0.15,
         "acceleration": 0.16, "control": 0.12,
-        "segments": ["curva", "reta", "curva", "reta"],
+        "segments": ["curva", "curva", "reta", "curva", "reta", "curva"],
     },
 }
 
@@ -100,10 +100,13 @@ DRIVING_MODES = {
 }
 
 
-class DecisionAction(TypedDict):
+class DecisionAction(TypedDict, total=False):
     mode: str
     attack: bool
     boost: bool
+    line: str
+    pit: bool
+    pit_tire: str
 
 
 @dataclass
@@ -146,6 +149,7 @@ class Driver:
     style_control: int = 0
     car_damage: float = 0.0  # 0-100, cresce durante a corrida
     retired: bool = False
+    pit_stops: int = 0
 
     def effective_skill(self, attribute):
         return getattr(self, attribute) + getattr(self, f"style_{attribute}", 0)
@@ -195,6 +199,9 @@ class Race:
     total_laps: int = TOTAL_LAPS
     decision_seconds: int = 45
     current_decision_label: str = "Aguardando decisões"
+    current_segment_type: str = "reta"
+    safety_car_laps: int = 0
+    early_finish: bool = False
 
     @property
     def full(self):
@@ -1049,7 +1056,7 @@ def lobby_embed(race: Race, title="🏁 F1 Discord Racing — Lobby", descriptio
         embed.add_field(name="🏎️ Pilotos e posições provisórias", value="\n".join(rows), inline=False)
     else:
         embed.add_field(name="🏎️ Pilotos", value="Ninguém entrou ainda.", inline=False)
-    embed.set_footer(text="Distribua exatamente 10 pontos, escolha pneus e marque Estou pronto.")
+    embed.set_footer(text="Distribua 10 pontos (ajustáveis no lobby), escolha pneus e marque Estou pronto.")
     return embed
 
 
@@ -1164,10 +1171,7 @@ class LobbyView(discord.ui.View):
     async def configure(self, interaction, button):
         if not self.active(interaction) or interaction.user.id not in self.race.drivers:
             return await interaction.response.send_message("Entre no lobby antes.", ephemeral=True)
-        profile = gacha_profile(interaction.user.id)
-        if profile.get("skills_locked"):
-            return await interaction.response.send_message("Seus atributos já foram definidos e estão bloqueados.", ephemeral=True)
-        modal = ProfileSkillsModal(interaction.user.id)
+        modal = ProfileSkillsModal(interaction.user.id, race=self.race)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Escolher pneus", emoji="🛞", style=discord.ButtonStyle.secondary, row=0)
@@ -1273,56 +1277,67 @@ class ClosedView(discord.ui.View):
 
 
 class RaceDecisionView(discord.ui.View):
-    """Botões públicos compartilhados. O embed não mostra a escolha individual até todos decidirem."""
+    """Ações contextuais: traçado em curvas, DRS/Boost/Box em retas."""
     def __init__(self, race):
         super().__init__(timeout=None)
         self.race = race
+        if race.current_segment_type == "curva":
+            self.add_action("Por dentro", "🟠", "normal", line="inside", row=0)
+            self.add_action("Por fora", "🔵", "normal", line="outside", row=0)
+            self.add_action("Defender a linha", "🛡️", "defensive", line="defend", row=1)
+            self.add_action("Traçado seguro", "🟢", "safe", line="safe", row=1)
+        else:
+            self.add_action("Manter ritmo", "⚖️", "normal", row=0)
+            self.add_action("Defender posição", "🛡️", "defensive", row=0)
+            if self.any_driver_in_drs_window():
+                self.add_action("DRS / Ultrapassar", "↗️", "normal", attack=True, row=1)
+            self.add_action("Boost Mode", "⚡", "normal", boost=True, row=1)
+            for row, tires in ((2, (("Box: Soft", "Soft", "🔴"), ("Box: Medium", "Medium", "🟡"), ("Box: Hard", "Hard", "⚪"))),
+                               (3, (("Box: Inter", "Intermediate", "🟢"), ("Box: Wet", "Wet", "🔵")))):
+                for label, tire, emoji in tires:
+                    self.add_action(label, emoji, "normal", pit=True, pit_tire=tire, row=row)
 
-    async def record_choice(self, interaction, mode, attack=False, boost=False):
+    def any_driver_in_drs_window(self):
+        active = sorted([d for d in self.race.drivers.values() if not d.finished and not d.retired], key=lambda d: d.total_time)
+        return any(active[i].total_time - active[i-1].total_time <= OVERTAKE_DETECTION_SECONDS for i in range(1, len(active)))
+
+    def add_action(self, label, emoji, mode, attack=False, boost=False, line=None, pit=False, pit_tire=None, row=0):
+        button = discord.ui.Button(label=label, emoji=emoji, style=discord.ButtonStyle.primary if attack or pit else discord.ButtonStyle.secondary, row=row)
+        async def callback(interaction):
+            await self.record_choice(interaction, mode, attack=attack, boost=boost, line=line, pit=pit, pit_tire=pit_tire)
+        button.callback = callback
+        self.add_item(button)
+
+    async def record_choice(self, interaction, mode, attack=False, boost=False, line=None, pit=False, pit_tire=None):
         race = race_for_channel(interaction.channel_id)
         driver = race.drivers.get(interaction.user.id) if race else None
-        if race is not self.race or not race.race_started or driver is None or driver.finished:
+        if race is not self.race or not race.race_started or driver is None or driver.finished or driver.retired:
             return await interaction.response.send_message("Você não é um piloto ativo nesta corrida.", ephemeral=True)
+        active = sorted([d for d in race.drivers.values() if not d.finished and not d.retired], key=lambda d: d.total_time)
+        index = active.index(driver) if driver in active else 0
+        gap = driver.total_time - active[index-1].total_time if index > 0 else None
+        if attack and (race.current_segment_type != "reta" or gap is None or gap > OVERTAKE_DETECTION_SECONDS):
+            return await interaction.response.send_message("DRS indisponível: precisa estar até 1,0s do carro à frente em uma reta.", ephemeral=True)
+        if (boost or pit or attack) and race.current_segment_type != "reta":
+            return await interaction.response.send_message("Essa ação só está disponível em uma reta.", ephemeral=True)
         async with race.decision_lock:
             if driver.chosen_action is not None:
                 return await interaction.response.send_message("Você já confirmou sua decisão neste trecho.", ephemeral=True)
-            decision: DecisionAction = {"mode": mode, "attack": attack, "boost": boost}
-            driver.chosen_action = decision
-            # A resposta é pública, mas só informa o status. O botão escolhido não é revelado.
-            active = [d for d in race.drivers.values() if not d.finished and not d.retired]
-            embed = decision_status_embed(race, active, race.current_decision_label, [])
-            await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="Normal", emoji="⚖️", style=discord.ButtonStyle.secondary, row=0)
-    async def normal(self, interaction, button):
-        await self.record_choice(interaction, "normal")
-
-    @discord.ui.button(label="Agressivo", emoji="🔥", style=discord.ButtonStyle.danger, row=0)
-    async def aggressive(self, interaction, button):
-        await self.record_choice(interaction, "aggressive")
-
-    @discord.ui.button(label="Defensivo", emoji="🛡️", style=discord.ButtonStyle.primary, row=0)
-    async def defensive(self, interaction, button):
-        await self.record_choice(interaction, "defensive")
-
-    @discord.ui.button(label="Seguro", emoji="🟢", style=discord.ButtonStyle.success, row=0)
-    async def safe(self, interaction, button):
-        await self.record_choice(interaction, "safe")
-
-    @discord.ui.button(label="Overtake Mode", emoji="↗️", style=discord.ButtonStyle.primary, row=1)
-    async def overtake(self, interaction, button):
-        await self.record_choice(interaction, "aggressive", attack=True)
-
-    @discord.ui.button(label="Boost Mode", emoji="⚡", style=discord.ButtonStyle.secondary, row=1)
-    async def boost(self, interaction, button):
-        await self.record_choice(interaction, "normal", boost=True)
+            action: DecisionAction = {"mode": mode, "attack": attack, "boost": boost}
+            if line: action["line"] = line
+            if pit:
+                action["pit"] = True
+                action["pit_tire"] = pit_tire
+            driver.chosen_action = action
+            active_now = [d for d in race.drivers.values() if not d.finished and not d.retired]
+            await interaction.response.edit_message(embed=decision_status_embed(race, active_now, race.current_decision_label, []), view=self)
 
 
 def segment_base_time(segment, circuit):
-    base_lap = circuit["base_lap"]
-    if segment == "reta":
-        return base_lap * 0.22
-    return base_lap * 0.28
+    segments = circuit.get("segments", ["reta", "curva"])
+    total_weight = sum(0.82 if item == "reta" else 1.18 for item in segments) or 1
+    weight = 0.82 if segment == "reta" else 1.18
+    return circuit["base_lap"] * weight / total_weight
 
 
 def skill_segment_bonus(driver, segment):
@@ -1340,6 +1355,18 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     base = segment_base_time(segment, circuit)
 
     skill_bonus = skill_segment_bonus(driver, segment)
+    pit_penalty = 0.0
+    if action.get("pit"):
+        chosen_tire = action.get("pit_tire") or ("Wet" if rain > 0.50 else "Intermediate" if rain > 0.10 else "Medium")
+        if chosen_tire not in TIRES:
+            chosen_tire = "Medium"
+        old_tire = driver.tire
+        driver.tire = chosen_tire
+        driver.tire_wear = 0.0
+        driver.car_damage = max(0.0, driver.car_damage - 12.0)
+        driver.pit_stops += 1
+        pit_penalty = 18.0
+        event = f"🛠️ PIT STOP: {driver_display_name(driver)} trocou {TIRES[old_tire]['label'] if old_tire in TIRES else 'pneus'} por {TIRES[chosen_tire]['label']} e reparou parte do dano."
     if driver.ability == "Largada Explosiva" and race.current_lap == 1:
         skill_bonus += base * 0.006
     if driver.ability == "Última Volta" and race.current_lap == race.total_laps:
@@ -1351,6 +1378,20 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     if driver.ability == "Rei da Chuva":
         weather_loss *= 0.90
     mode_adjustment = mode["pace"]
+    line_risk = 0.0
+    if segment == "curva":
+        line = action.get("line")
+        if line == "inside":
+            mode_adjustment -= 0.035
+            line_risk += 0.012
+        elif line == "outside":
+            mode_adjustment -= 0.018
+        elif line == "defend":
+            mode_adjustment += 0.012
+            line_risk -= 0.012
+        elif line == "safe":
+            mode_adjustment += 0.025
+            line_risk -= 0.020
 
     # Energia de jogo substitui um uso simplificado da gestão elétrica:
     # Boost consome energia e dá bônus, Overtake Mode consome energia quando elegível.
@@ -1383,10 +1424,10 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     damage_penalty = driver.car_damage * 0.0018
     mode_risk = mode["risk"]
     random_error = random.uniform(-0.12, 0.12)  # moderado
-    time = base - skill_bonus - (tire_condition * 0.12) + tire_loss + weather_loss + mode_adjustment + energy_adjustment + random_error + base * damage_penalty
+    time = base - skill_bonus - (tire_condition * 0.12) + tire_loss + weather_loss + mode_adjustment + energy_adjustment + random_error + base * damage_penalty + pit_penalty
 
     curve_intensity = 1.0 if segment == "curva" else 0.35
-    risk = 0.045 + mode["risk"] + rain * (0.16 if segment == "curva" else 0.08)
+    risk = 0.025 + mode["risk"] + line_risk + rain * (0.12 if segment == "curva" else 0.06)
     risk += (driver.tire_wear / 100) * 0.20 + (driver.car_damage / 100) * 0.12
     risk += curve_intensity * max(0, 5 - driver.effective_skill("curves")) * 0.012
     risk += curve_intensity * max(0, 5 - driver.effective_skill("control")) * 0.014
@@ -1625,6 +1666,8 @@ EVENT_IMAGE_RULES = {
     "Safety Car": ("safety_car", "🚨"),
     "bandeira vermelha": ("bandeira_vermelha", "🟥"),
     "volta mais rápida": ("volta_rapida", "⏱️"),
+    "PIT STOP": ("pitstop", "🛠️"),
+    "mudança de clima": ("clima", "🌦️"),
 }
 
 def event_image_links():
@@ -1665,124 +1708,140 @@ async def publish_important_event(race, message):
 
 async def run_race(race):
     race.race_started = True
-    # Ordem de grid de qualificação; tempo acumulado inicial usa o qualifying como
-    # separação mínima de grid, não como tempo cronometrado de corrida.
     grid = sorted(race.drivers.values(), key=lambda d: d.grid_position or 99)
     for rank, driver in enumerate(grid):
         driver.total_time = rank * 0.25
         driver.distance = float(rank)
-
     circuit = CIRCUITS[race.circuit_name]
+    segments = circuit.get("segments") or ["reta", "curva"]
     for lap in range(1, race.total_laps + 1):
+        if race.early_finish:
+            break
         race.current_lap = lap
         lap_start_times = {d.user.id: d.total_time for d in race.drivers.values()}
         lap_events = []
-        for segment_index, segment in enumerate(circuit["segments"], 1):
+        if lap > 1 and random.random() < 0.12:
+            previous_weather = race.weather_name
+            race.weather_name = random.choice([name for name in WEATHER if name != previous_weather])
+            conditions = WEATHER[race.weather_name]
+            race.ambient_temp = random.randint(*conditions["ambient"])
+            race.track_temp = random.randint(*conditions["track"])
+            race.surface = conditions["surface"]
+            weather_event = f"🌦️ Mudança de clima: {previous_weather} -> {race.weather_name}. Pista {race.surface.lower()}."
+            lap_events.append(weather_event)
+            await publish_important_event(race, weather_event)
+        for segment_index, segment in enumerate(segments, 1):
             race.current_segment = segment_index
+            race.current_segment_type = segment
             active = [d for d in race.drivers.values() if not d.finished and not d.retired]
-            if not active:
+            if len(active) <= 1:
+                if active:
+                    active[0].finished = True
+                    race.early_finish = True
+                    winner_event = f"🏁 Corrida encerrada antecipadamente: {driver_display_name(active[0])} é o vencedor, único piloto restante na pista!"
+                    lap_events.append(winner_event)
+                    await publish_important_event(race, winner_event)
                 break
-            for d in active:
-                d.chosen_action = None
-
-            segment_title = f"{segment.upper()} {segment_index}/{SEGMENTS_PER_LAP}"
+            for driver in active:
+                driver.chosen_action = None
+            segment_title = f"{segment.upper()} {segment_index}/{len(segments)}"
             race.current_decision_label = f"Volta {lap}/{race.total_laps} • {segment_title}"
-            race.decision_seconds = race.decision_seconds or 45
             await update_race_panel(race, active, segment_title, lap_events, show_decision=True)
-
-            deadline = asyncio.get_running_loop().time() + race.decision_seconds
-            while any(d.chosen_action is None for d in active) and asyncio.get_running_loop().time() < deadline:
+            deadline = asyncio.get_running_loop().time() + (race.decision_seconds or 45)
+            while any(driver.chosen_action is None for driver in active) and asyncio.get_running_loop().time() < deadline:
                 await asyncio.sleep(1)
-
-            # Após todos confirmarem ou o prazo acabar, revela as escolhas e desativa os botões.
             if race.message:
-                reveal_embed = reveal_decisions_embed(race, active, segment_title, lap_events)
-                await race.message.edit(embed=reveal_embed, view=ClosedView())
-            # Snapshot do ranking antes do trecho para detectar o carro à frente.
+                await race.message.edit(embed=reveal_decisions_embed(race, active, segment_title, lap_events), view=ClosedView())
             pre_order = sorted(active, key=lambda d: d.total_time)
-            gaps = {}
-            for idx, driver in enumerate(pre_order):
-                if idx == 0:
-                    gaps[driver.user.id] = None
-                else:
-                    gaps[driver.user.id] = driver.total_time - pre_order[idx-1].total_time
-
-            # Resolver por ranking pre trecho: decisão dos pilotos é simultânea,
-            # mas o carro imediatamente à frente é identificado no ponto de detecção.
+            gaps = {driver.user.id: (driver.total_time - pre_order[index-1].total_time if index else None)
+                    for index, driver in enumerate(pre_order)}
             for driver in active:
                 action: DecisionAction = driver.chosen_action or {"mode": "safe", "attack": False, "boost": False}
                 index = pre_order.index(driver)
-                opponent = pre_order[index-1] if index > 0 else None
-                gap = gaps[driver.user.id]
-                segment_time, event = calculate_segment_time(driver, race, segment, action, gap, opponent)
+                opponent = pre_order[index-1] if index else None
+                segment_time, event = calculate_segment_time(driver, race, segment, action, gaps[driver.user.id], opponent)
                 driver.total_time += segment_time
                 driver.distance += 1.0
                 if event:
                     event_message = f"{driver_display_name(driver)}: {event}"
                     lap_events.append(event_message)
-                    await publish_important_event(race, event_message)
-
-            # Resolver oportunidade de ultrapassagem, sem garantia automática:
-            # se acionou ataque, está na janela de distância e o delta do segmento favoreceu,
-            # inverter temporariamente o pequeno gap via bônus de tempo probabilístico.
-            updated = sorted(active, key=lambda d: d.total_time)
-            for idx in range(1, len(updated)):
-                driver = updated[idx]
-                ahead = updated[idx-1]
+                    if any(word in event_message.lower() for word in ("pit stop", "acidente", "derrapagem", "estouro de pneu", "abandono")):
+                        await publish_important_event(race, event_message)
+            updated = sorted([d for d in active if not d.retired], key=lambda d: d.total_time)
+            for index in range(1, len(updated)):
+                driver, ahead = updated[index], updated[index-1]
                 action = driver.chosen_action or {}
                 prior_gap = gaps.get(driver.user.id)
                 if action.get("attack") and prior_gap is not None and prior_gap <= OVERTAKE_DETECTION_SECONDS:
-                    mode = DRIVING_MODES[action.get("mode", "normal")]
                     chance = 0.22 + driver.effective_skill("straights") * 0.025 + driver.effective_skill("acceleration") * 0.018 + driver.effective_skill("control") * 0.008
                     if driver.ability in ("Ultrapassador Nato", "Especialista em DRS"):
                         chance += 0.035
-                    chance += mode["attack"]
                     chance -= ahead.control * 0.012
                     if ahead.ability == "Defensor Nato":
                         chance -= 0.035
                     chance = max(0.08, min(0.68, chance))
                     if random.random() < chance and driver.total_time > ahead.total_time:
-                        # Overtake representa uma vantagem marginal no tempo do segmento,
-                        # nunca uma posição concedida de forma garantida.
                         driver.total_time -= min(0.35, driver.total_time - ahead.total_time + 0.02)
                         overtake_event = f"↗️ {driver_display_name(driver)} completou uma ultrapassagem!"
                         lap_events.append(overtake_event)
                         await publish_important_event(race, overtake_event)
                     else:
                         lap_events.append(f"🚥 {driver_display_name(driver)} tentou ultrapassar, mas não conseguiu.")
-
-            # Avançar classificação, atualização publicada por segmento.
-            embed = standings_embed(race, lap, segment_title, lap_events)
+            incident = any("acidente" in event.lower() or "abandono" in event.lower() for event in lap_events)
+            still_running = [d for d in race.drivers.values() if not d.retired]
+            if incident and len(still_running) > 1 and race.safety_car_laps == 0 and random.random() < 0.55:
+                race.safety_car_laps = 1
+                safety_event = "🚨 SAFETY CAR NA PISTA! Pelotão neutralizado; as diferenças foram reduzidas."
+                lap_events.append(safety_event)
+                await publish_important_event(race, safety_event)
+            if race.safety_car_laps > 0 and len(still_running) > 1:
+                ordered = sorted(still_running, key=lambda d: d.total_time)
+                leader_time = ordered[0].total_time
+                for position, driver in enumerate(ordered):
+                    driver.total_time = leader_time + position * 0.45
             if race.message:
-                await race.message.edit(embed=embed, view=ClosedView())
-
-        # Final da volta: contabilizar volta e checar chegada ao fim da volta 10.
+                await race.message.edit(embed=standings_embed(race, lap, segment_title, lap_events), view=ClosedView())
+            still_active = [d for d in race.drivers.values() if not d.finished and not d.retired]
+            if len(still_active) == 1:
+                still_active[0].finished = True
+                race.early_finish = True
+                winner_event = f"🏁 Corrida encerrada antecipadamente: {driver_display_name(still_active[0])} é o vencedor, único piloto restante na pista!"
+                lap_events.append(winner_event)
+                await publish_important_event(race, winner_event)
+                if race.message:
+                    await race.message.edit(embed=standings_embed(race, lap, "FIM ANTECIPADO", lap_events), view=ClosedView())
+                break
         for driver in race.drivers.values():
-            if not driver.finished:
+            if not driver.finished and not driver.retired:
                 driver.last_lap_time = driver.total_time - lap_start_times.get(driver.user.id, driver.total_time)
-                if not driver.retired and driver.last_lap_time > 0 and (driver.best_lap_time is None or driver.last_lap_time < driver.best_lap_time):
+                if driver.last_lap_time > 0 and (driver.best_lap_time is None or driver.last_lap_time < driver.best_lap_time):
                     driver.best_lap_time = driver.last_lap_time
-                if lap == race.total_laps:
-                    driver.finished = True
+        if race.safety_car_laps > 0:
+            race.safety_car_laps -= 1
         await asyncio.sleep(0.5)
-
     final_order = current_order(race)
+    for driver in final_order:
+        if not driver.retired:
+            driver.finished = True
     fastest = min((d for d in final_order if d.best_lap_time is not None and not d.retired), key=lambda d: d.best_lap_time, default=None)
     if fastest:
         await publish_important_event(race, f"⏱️ Volta mais rápida: {driver_display_name(fastest)} — {format_time(fastest.best_lap_time)}")
     await register_championship_result(race, final_order, fastest)
-    podium = "\n".join(
-        f"**P{position} — {driver_display_name(driver)}** | Tempo acumulado: `{format_time(driver.total_time)}` | "
-        f"Pneu: {TIRES[driver.tire]['label']} | desgaste {driver.tire_wear:.0f}%"
+    podium = "\\n".join(
+        f"**P{position} — {driver_display_name(driver)}** | Tempo: `{format_time(driver.total_time)}` | "
+        f"{TIRES[driver.tire]['label']} • {driver.pit_stops} pit stop(s) • desgaste {driver.tire_wear:.0f}%"
+        + (" • ⛔ Abandonou" if driver.retired else "")
         for position, driver in enumerate(final_order, 1)
     )
-    embed = discord.Embed(title="🏆 FIM DE CORRIDA — RESULTADO FINAL", description=podium, color=discord.Color.gold())
-    embed.set_footer(text=f"{race.circuit_name} • {race.total_laps} voltas • corrida concluída")
+    title = "🏁 VITÓRIA ANTECIPADA" if race.early_finish else "🏆 FIM DE CORRIDA — RESULTADO FINAL"
+    embed = discord.Embed(title=title, description=podium or "Corrida encerrada sem pilotos classificados.", color=discord.Color.gold())
+    embed.set_footer(text=f"{race.circuit_name} • {race.current_lap}/{race.total_laps} voltas • corrida concluída")
     if race.message:
         await race.message.edit(embed=embed, view=ClosedView())
     else:
         await race.channel.send(embed=embed)
     races.pop(race.channel_id, None)
+
 
 
 
@@ -1848,8 +1907,8 @@ class InventoryView(discord.ui.View):
 
 class ProfileSkillsModal(discord.ui.Modal, title="Distribuir 10 pontos pessoais"):
     distribution = discord.ui.TextInput(label="Pontos na ordem indicada", placeholder="1, 2, 2, 1, 2, 2", max_length=30, required=True)
-    def __init__(self, owner_id):
-        super().__init__(); self.owner_id = owner_id; self.source_message_id = None
+    def __init__(self, owner_id, race=None):
+        super().__init__(); self.owner_id = owner_id; self.source_message_id = None; self.race = race
         profile = gacha_profile(owner_id)
         self.distribution.default = ", ".join(str(profile["skills"].get(key, 0)) for key, _, _ in SKILL_FIELDS)
     async def on_submit(self, interaction):
@@ -1864,11 +1923,43 @@ class ProfileSkillsModal(discord.ui.Modal, title="Distribuir 10 pontos pessoais"
         if any(value < 0 or value > 10 for value in skills.values()) or sum(skills.values()) != SKILL_POINTS:
             return await interaction.response.send_message(f"Os seis atributos devem ser inteiros entre 0 e 10 e somar {SKILL_POINTS}.", ephemeral=True)
         profile = gacha_profile(self.owner_id); profile["skills"] = skills; profile["skills_locked"] = True; save_profiles()
-        await interaction.response.send_message("✅ Distribuição pessoal salva.", ephemeral=True)
+        if self.race and self.owner_id in self.race.drivers and not self.race.started:
+            driver = self.race.drivers[self.owner_id]
+            for key, value in skills.items():
+                setattr(driver, key, value)
+            driver.straights = skills["speed"]
+            driver.braking = skills["qualifying"]
+            driver.acceleration = skills["engine"]
+            driver.ready = False
+        await interaction.response.send_message("✅ Distribuição salva. Você pode ajustá-la novamente enquanto o lobby estiver aberto.", ephemeral=True)
         await refresh_profile_message(interaction, self.source_message_id, profile)
 
 class ProfileView(discord.ui.View):
     def __init__(self,owner_id): super().__init__(timeout=180);self.owner_id=owner_id
+    @discord.ui.button(label="Histórico de corridas", emoji="📜", style=discord.ButtonStyle.success, row=1)
+    async def history(self, interaction, button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Esse botão não é seu.", ephemeral=True)
+        guild_id = interaction.guild.id if interaction.guild else 0
+        entries = []
+        for season in CHAMPIONSHIP.get("seasons", {}).values():
+            if str(season.get("guild_id")) != str(guild_id):
+                continue
+            for race_data in season.get("races", []):
+                result = next((item for item in race_data.get("results", []) if item.get("user_id") == str(self.owner_id)), None)
+                if result:
+                    entries.append((race_data.get("date", ""), race_data, result, season.get("name", "Temporada")))
+        entries.sort(key=lambda item: item[0], reverse=True)
+        if not entries:
+            return await interaction.response.send_message("Você ainda não possui corridas registradas no campeonato.", ephemeral=True)
+        lines = []
+        for _, race_data, result, season_name in entries[:10]:
+            status = " • ⛔ Abandono" if result.get("retired") else ""
+            fastest = " • 🟣 Volta mais rápida" if result.get("fastest_lap") else ""
+            lines.append(f"**P{result['position']} — {race_data.get('circuit', 'Circuito')}**{status}{fastest}\\n_{season_name} • {race_data.get('date', 'Data não registrada')[:10]}_")
+        embed = discord.Embed(title="📜 Histórico de corridas", description="\\n\\n".join(lines), color=discord.Color.gold())
+        embed.set_footer(text="Exibindo as 10 corridas mais recentes.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
     @discord.ui.button(label="Configurar",emoji="⚙️",style=discord.ButtonStyle.primary,row=0)
     async def configure(self,interaction,button):
         if interaction.user.id!=self.owner_id: return await interaction.response.send_message("Esse botão não é seu.",ephemeral=True)
@@ -1878,7 +1969,7 @@ class ProfileView(discord.ui.View):
         if interaction.user.id != self.owner_id: return await interaction.response.send_message("Esse botão não é seu.", ephemeral=True)
         profile = gacha_profile(self.owner_id)
         if profile.get("skills_locked"):
-            return await interaction.response.send_message("Seus atributos já foram definidos e não podem ser alterados.", ephemeral=True)
+            return await interaction.response.send_message("Para mudar seus atributos, entre em um lobby e use Configurar carro antes da classificação.", ephemeral=True)
         modal=ProfileSkillsModal(self.owner_id); modal.source_message_id=interaction.message.id; await interaction.response.send_modal(modal)
     @discord.ui.button(label="Inventário",emoji="🎒",style=discord.ButtonStyle.secondary,row=0)
     async def inventory(self,interaction,button):
@@ -1985,7 +2076,7 @@ class RollConfirmView(discord.ui.View):
 class ShopView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
-        self.add_item(discord.ui.Button(label="Gamepass: Pular Giro (liberação manual)",emoji="⏭️",style=discord.ButtonStyle.secondary,disabled=True))
+        pass  # Gamepass continua sob liberação administrativa, fora da loja.
 
 @bot.command(name="roll-estilo")
 async def roll_style_command(ctx):
@@ -2389,6 +2480,20 @@ async def help_f1(ctx):
     await ctx.send(embed=embed)
 
 
+STYLE_IMAGE_FILE = Path(__file__).parent / "assets" / "estilos" / "links.json"
+
+def style_image_url(style_name):
+    style = next((item for item in PILOT_STYLES if item["name"] == style_name), None)
+    if style and style.get("image_url"):
+        return style["image_url"]
+    try:
+        mapping = json.loads(STYLE_IMAGE_FILE.read_text(encoding="utf-8"))
+        value = mapping.get(style_name, "") if isinstance(mapping, dict) else ""
+        return value if isinstance(value, str) and value.startswith(("https://", "http://")) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def build_profile_embed(profile, member, guild):
     equipped=profile.get("equipped_style")
     style=next((s for s in profile["style_collection"] if s["name"]==equipped),None)
@@ -2408,8 +2513,19 @@ def build_profile_embed(profile, member, guild):
     desc += " • ".join(f"{label}: +{style_values.get(key,0)}" for key,label,emoji in SKILL_FIELDS) if style else "Nenhum estilo equipado."
     desc += "\n\n**⚙️ Atributos finais (pessoal + estilo)**\n"
     desc += " • ".join(f"{label}: {int(personal.get(key,0))+style_values.get(key,0)}" for key,label,emoji in SKILL_FIELDS)
+    if guild:
+        season = season_for(guild.id)
+        if season:
+            rows = championship_table(season)
+            ranking = next((i for i, row in enumerate(rows, 1) if row["user_id"] == str(member.id)), None)
+            points = next((row["points"] for row in rows if row["user_id"] == str(member.id)), 0)
+            desc += f"\\n\\n**🏆 Campeonato atual:** P{ranking} • {points} pontos" if ranking else "\\n\\n**🏆 Campeonato atual:** ainda sem pontuação"
+        else:
+            desc += "\\n\\n**🏆 Campeonato:** nenhuma temporada ativa"
     embed=discord.Embed(title="🏎️ Perfil do piloto",description=desc,color=discord.Color.orange())
-    if profile.get("photo_url"): embed.set_image(url=profile["photo_url"])
+    image_url = style_image_url(equipped) if equipped else None
+    image_url = image_url or profile.get("photo_url")
+    if image_url: embed.set_image(url=image_url)
     return embed
 
 async def refresh_profile_message(interaction, message_id, profile):
