@@ -1269,9 +1269,11 @@ class CarAttributeSelect(discord.ui.Select):
             return await interaction.response.send_message("Essa configuração pertence a outro piloto.", ephemeral=True)
         if race_for_channel(interaction.channel_id) is not view.race or view.race.started:
             return await interaction.response.send_message("O lobby não está mais disponível.", ephemeral=True)
+        driver = view.race.drivers.get(view.user_id)
+        if driver is None:
+            return await interaction.response.send_message("Você não está mais inscrito nesta corrida.", ephemeral=True)
         view.selected_attribute = self.values[0]
         view.points_select.refresh_options()
-        driver = view.race.drivers[view.user_id]
         await interaction.response.edit_message(
             embed=car_setup_embed(driver, view.selected_attribute),
             view=view,
@@ -1306,7 +1308,9 @@ class CarPointsSelect(discord.ui.Select):
         if not view.selected_attribute:
             return await interaction.response.send_message("Escolha primeiro o atributo que deseja configurar.", ephemeral=True)
 
-        driver = view.race.drivers[view.user_id]
+        driver = view.race.drivers.get(view.user_id)
+        if driver is None:
+            return await interaction.response.send_message("Você não está mais inscrito nesta corrida.", ephemeral=True)
         attribute = view.selected_attribute
         new_value = int(self.values[0])
         old_value = getattr(driver, attribute)
