@@ -5,6 +5,10 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Dict, Optional, List, TypedDict
 from pathlib import Path
+from io import BytesIO
+
+import aiohttp
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 import discord
 from discord.ext import commands
@@ -152,6 +156,7 @@ class Driver:
     retired: bool = False
     pit_stops: int = 0
     last_pit_lap: int = 0
+    tire_warning_lap: int = 0
 
     def effective_skill(self, attribute):
         return getattr(self, attribute) + getattr(self, f"style_{attribute}", 0)
@@ -204,6 +209,7 @@ class Race:
     current_segment_type: str = "reta"
     safety_car_laps: int = 0
     early_finish: bool = False
+    pending_broadcasts: List[str] = field(default_factory=list)
 
     @property
     def full(self):
@@ -1452,7 +1458,7 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     pit_penalty = 0.0
     event = ""
     if action.get("pit"):
-        chosen_tire = action.get("pit_tire") or ("Wet" if rain > 0.50 else "Intermediate" if rain > 0.10 else "Medium")
+        chosen_tire = action.get("pit_tire") or ("Wet" if rain > 0.65 else "Intermediate" if rain > 0.10 else "Medium")
         if chosen_tire not in TIRES:
             chosen_tire = "Medium"
         old_tire = driver.tire
@@ -1461,8 +1467,13 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
         driver.car_damage = max(0.0, driver.car_damage - 12.0)
         driver.pit_stops += 1
         driver.last_pit_lap = race.current_lap
-        pit_penalty = 18.0
-        event = f"🛠️ PIT STOP: {driver_display_name(driver)} trocou {TIRES[old_tire]['label'] if old_tire in TIRES else 'pneus'} por {TIRES[chosen_tire]['label']} e reparou parte do dano."
+        crew_loss = random.uniform(0.5, 2.5)
+        if random.random() < 0.18:
+            crew_loss += random.uniform(2.0, 5.0)
+        pit_penalty = 18.0 + crew_loss
+        event = (f"🛠️ PIT STOP: {driver_display_name(driver)} trocou "
+                 f"{TIRES[old_tire]['label'] if old_tire in TIRES else 'pneus'} por {TIRES[chosen_tire]['label']}. "
+                 f"Parada: 18s + {crew_loss:.1f}s de perda adicional na equipe.")
     if driver.ability == "Largada Explosiva" and race.current_lap == 1:
         skill_bonus += base * 0.006
     if driver.ability == "Última Volta" and race.current_lap == race.total_laps:
@@ -1471,6 +1482,20 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     tire_condition = max(0.60, 1.0 - driver.tire_wear / 160.0)
     tire_loss = max(0.0, 1.0 - tire_mult) * (base * 0.12)
     weather_loss = rain * (base * 0.08)
+    mismatch_loss = 0.0
+    wrong_tire = False
+    if rain > 0.65 and driver.tire != "Wet":
+        mismatch_loss = base * 0.12
+        wrong_tire = True
+    elif 0.10 < rain <= 0.65 and driver.tire not in ("Intermediate", "Wet"):
+        mismatch_loss = base * 0.07
+        wrong_tire = True
+    elif rain <= 0.10 and driver.tire in ("Intermediate", "Wet"):
+        mismatch_loss = base * 0.10
+        wrong_tire = True
+    if wrong_tire and driver.tire_warning_lap != race.current_lap:
+        driver.tire_warning_lap = race.current_lap
+        event = (event + " " if event else "") + f"⚠️ {driver_display_name(driver)} está com pneus inadequados para a pista ({TIRES[driver.tire]['label']})."
     if driver.ability == "Rei da Chuva":
         weather_loss *= 0.90
     mode_adjustment = mode["pace"]
@@ -1519,10 +1544,12 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     damage_penalty = driver.car_damage * 0.0018
     mode_risk = mode["risk"]
     random_error = random.uniform(-0.12, 0.12)  # moderado
-    time = base - skill_bonus - (tire_condition * 0.12) + tire_loss + weather_loss + mode_adjustment + energy_adjustment + random_error + base * damage_penalty + pit_penalty
+    time = base - skill_bonus - (tire_condition * 0.12) + tire_loss + weather_loss + mismatch_loss + mode_adjustment + energy_adjustment + random_error + base * damage_penalty + pit_penalty
 
     curve_intensity = 1.0 if segment == "curva" else 0.35
     risk = 0.025 + mode["risk"] + line_risk + rain * (0.12 if segment == "curva" else 0.06)
+    if wrong_tire:
+        risk += 0.055 if rain > 0.65 else 0.025
     risk += (driver.tire_wear / 100) * 0.20 + (driver.car_damage / 100) * 0.12
     risk += curve_intensity * max(0, 5 - driver.effective_skill("curves")) * 0.012
     risk += curve_intensity * max(0, 5 - driver.effective_skill("control")) * 0.014
@@ -1564,8 +1591,10 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
         wear_increment *= 1.20
     if action["mode"] == "safe":
         wear_increment *= 0.85
-    if rain > 0.50 and driver.tire in ("Intermediate", "Wet"):
+    if rain > 0.50 and driver.tire == "Wet":
         wear_increment *= 0.85
+    if wrong_tire:
+        wear_increment *= 1.25
     driver.tire_wear = min(100.0, driver.tire_wear + wear_increment)
     # Estouro progressivo: probabilidade insignificante com pneus frescos, maior no limite.
     if driver.tire_wear >= 72:
