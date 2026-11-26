@@ -1625,23 +1625,30 @@ def current_order(race):
 
 def standings_embed(race, lap, segment_label, events):
     order = current_order(race)
-    lines = []
+    position_lines = []
+    condition_lines = []
     for pos, driver in enumerate(order, 1):
-        if pos == 1:
-            gap = "Líder"
-        else:
-            gap = f"+{driver.total_time - order[pos-2].total_time:.3f}s para P{pos-1}"
-        lines.append(
-            f"**P{pos} — {driver_display_name(driver)}** | Volta {lap}/{race.total_laps}\n"
-            f"└ Tempo: `{format_time(driver.total_time)}` • {gap}\n"
-            f"└ {TIRES[driver.tire]['label']} • desgaste {driver.tire_wear:.0f}% • energia {driver.energy:.0f}% • dano {driver.car_damage:.0f}%" + (" • ⛔ ABANDONOU" if driver.retired else "")
+        gap = "Líder" if pos == 1 else f"+{driver.total_time - order[pos-2].total_time:.3f}s para P{pos-1}"
+        status = " • ⛔ ABANDONOU" if driver.retired else ""
+        position_lines.append(
+            f"**P{pos} — {driver_display_name(driver)}**  `{format_time(driver.total_time)}`  · {gap}{status}"
+        )
+        condition_lines.append(
+            f"**{driver_display_name(driver)}:** {TIRES[driver.tire]['label']} · "
+            f"desgaste {driver.tire_wear:.0f}% · energia {driver.energy:.0f}% · dano {driver.car_damage:.0f}%"
         )
     embed = discord.Embed(
-        title=f"📊 Classificação — Volta {lap}/{race.total_laps} • {segment_label}",
-        description="\n".join(lines),
+        title="🏎️ Painel da corrida",
+        description=f"**{race.circuit_name}**  ·  Volta **{lap}/{race.total_laps}**  ·  {segment_label}",
         color=discord.Color.blue(),
     )
-    embed.add_field(name="🌦️ Condições da pista", value=f"**{race.weather_name}** • {race.surface} • Ambiente {race.ambient_temp}°C • Pista {race.track_temp}°C", inline=False)
+    embed.add_field(name="🏁 Classificação", value="\n".join(position_lines) or "Sem pilotos", inline=False)
+    embed.add_field(name="🛞 Estado dos carros", value="\n".join(condition_lines) or "Sem dados", inline=False)
+    embed.add_field(
+        name="🌦️ Condições da pista",
+        value=f"**{race.weather_name}** · {race.surface} · Ambiente {race.ambient_temp}°C · Pista {race.track_temp}°C",
+        inline=False,
+    )
     return embed
 
 
@@ -2088,7 +2095,10 @@ async def run_race(race):
     if race.message:
         await race.message.edit(embed=embed, view=ClosedView(), attachments=[podium_file] if podium_file else [])
     else:
-        await race.channel.send(embed=embed, file=podium_file) if podium_file else await race.channel.send(embed=embed)
+        if podium_file:
+            await race.channel.send(embed=embed, file=podium_file)
+        else:
+            await race.channel.send(embed=embed)
     await flush_race_broadcasts(race)
     races.pop(race.channel_id, None)
 
