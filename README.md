@@ -37,9 +37,9 @@ F1_Discord_Racing/
 
 ## Sistema de piloto
 
-Os dez pontos pessoais são distribuídos entre seis atributos: Gerenciamento de pneus, Curvas, Velocidade, Classificação, Motor e Controle. Após a primeira distribuição, os pontos ficam bloqueados. A habilidade especial é sorteada separadamente e não pode ser trocada por comando.
+Os dez pontos pessoais são distribuídos entre seis atributos: Gerenciamento de pneus, Curvas, Velocidade, Classificação, Motor e Controle. A distribuição pode ser alterada pelo botão **Distribuir pontos** no perfil, inclusive fora de uma corrida. A habilidade especial é sorteada separadamente e não pode ser trocada por comando.
 
-Os estilos do gacha mantêm as chances originais de raridade e agora distribuem bônus em seis atributos, incluindo gerenciamento de pneus. Cada raridade recebeu +1 ponto em relação à tabela anterior, e estilos comuns/incomuns podem ter atributos zerados para representar fraquezas reais. Membros podem transferir giros de estilo com `!transferir-giros @membro quantidade`. Habilidades podem ser sorteadas com `!roll-habilidade`; cada giro custa 25k sonhos e é liberado manualmente pelo administrador após pagamento.
+Cada jogador possui somente um estilo ativo: ao aceitar um novo resultado, o estilo anterior é substituído. Jogadores novos recebem um estilo aleatório gratuito na primeira criação do perfil. A carta do resultado permanece no canal e o perfil mostra a arte do estilo abaixo da foto pessoal (miniatura no canto superior direito). Os estilos do gacha mantêm as chances originais de raridade e distribuem bônus em seis atributos, incluindo gerenciamento de pneus. Cada raridade recebeu +1 ponto em relação à tabela anterior, e estilos comuns/incomuns podem ter atributos zerados para representar fraquezas reais. Membros podem transferir giros de estilo com `!transferir-giros @membro quantidade`. Habilidades podem ser sorteadas com `!roll-habilidade`; cada giro custa 25k sonhos e é liberado manualmente pelo administrador após pagamento.
 
 ## Campeonato
 
@@ -65,6 +65,6 @@ Use `!sistema` no Discord para abrir o painel interativo com informações sobre
 
 Os perfis, giros, estilos obtidos/equipados, atributos e dados pessoais são salvos em `app/profiles.json` na máquina que executa o bot. Esse arquivo **não deve ser enviado ao GitHub**: ele está no `.gitignore` para que atualizações do código não sobrescrevam o progresso dos jogadores.
 
-O bot cria o arquivo automaticamente quando necessário e mantém uma cópia anterior em `app/profiles.json.bak` ao salvar. Faça backup periódico desses dois arquivos. Se trocar de computador ou servidor, copie os arquivos para a pasta `app` da nova instalação antes de iniciar o bot.
+O bot cria o arquivo automaticamente quando necessário e mantém apenas uma cópia rotativa em `app/profiles.json.bak` ao salvar. Não são criados arquivos de backup versionados como `v2.bak` a cada inicialização. Faça backup periódico desses dois arquivos. Se trocar de computador ou servidor, copie os arquivos para a pasta `app` da nova instalação antes de iniciar o bot.
 
 **Importante ao atualizar uma instalação antiga:** antes de fazer `git pull`, copie `app/profiles.json` para um local seguro. Como esse arquivo era versionado em versões anteriores, a primeira atualização que o remover do Git pode exigir que você restaure o backup local depois do pull.
