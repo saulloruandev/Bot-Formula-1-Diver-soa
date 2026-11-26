@@ -2163,7 +2163,7 @@ async def run_race(race):
                     gap_after_segment = driver.total_time - target.total_time
                     if random.random() < chance and 0 < gap_after_segment <= 0.65:
                         driver.total_time = target.total_time - 0.02
-                    else:
+                    elif gap_after_segment > 0:
                         lap_events.append(f"🚥 {driver_display_name(driver)} tentou ultrapassar {driver_display_name(target)} na volta {lap}, mas não conseguiu.")
 
             # Compara a ordem antes e depois do trecho para narrar também ultrapassagens naturais.
