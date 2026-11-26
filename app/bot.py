@@ -2149,7 +2149,7 @@ class InventoryView(discord.ui.View):
         await interaction.response.send_message("⏸️ Gamepass Pular Giro desativada no seu perfil.", ephemeral=True)
 
 class ProfileSkillsModal(discord.ui.Modal, title="Distribuir 10 pontos pessoais"):
-    distribution = discord.ui.TextInput(label="Ordem dos 6 atributos", placeholder="Pneus, Curvas, Velocidade, Classificação, Motor, Controle", max_length=30, required=True)
+    distribution = discord.ui.TextInput(label="Pneus, Curvas, Veloc, Classif, Motor, Ctrl", placeholder="Use os pontos nesta ordem: pneus, curvas, velocidade, classificação, motor, controle", max_length=30, required=True)
     def __init__(self, owner_id, race=None):
         super().__init__(); self.owner_id = owner_id; self.source_message_id = None; self.race = race
         profile = gacha_profile(owner_id)
@@ -2199,8 +2199,8 @@ class ProfileView(discord.ui.View):
         for _, race_data, result, season_name in entries[:10]:
             status = " • ⛔ Abandono" if result.get("retired") else ""
             fastest = " • 🟣 Volta mais rápida" if result.get("fastest_lap") else ""
-            lines.append(f"**P{result['position']} — {race_data.get('circuit', 'Circuito')}**{status}{fastest}\\n_{season_name} • {race_data.get('date', 'Data não registrada')[:10]}_")
-        embed = discord.Embed(title="📜 Histórico de corridas", description="\\n\\n".join(lines), color=discord.Color.gold())
+            lines.append(f"**P{result['position']} — {race_data.get('circuit', 'Circuito')}**{status}{fastest}\n_{season_name} • {race_data.get('date', 'Data não registrada')[:10]}_")
+        embed = discord.Embed(title="📜 Histórico de corridas", description="\n\n".join(lines), color=discord.Color.gold())
         embed.set_footer(text="Exibindo as 10 corridas mais recentes.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
     @discord.ui.button(label="Configurar",emoji="⚙️",style=discord.ButtonStyle.primary,row=0)
