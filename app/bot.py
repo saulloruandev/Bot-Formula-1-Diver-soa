@@ -2163,13 +2163,31 @@ async def run_race(race):
                     gap_after_segment = driver.total_time - target.total_time
                     if random.random() < chance and 0 < gap_after_segment <= 0.65:
                         driver.total_time = target.total_time - 0.02
-                        overtake_event = (f"↗️ **{driver_display_name(driver)} ultrapassou "
-                                          f"{driver_display_name(target)}** na volta {lap}, "
-                                          f"trecho {segment_index}/{len(segments)}!")
-                        lap_events.append(overtake_event)
-                        await publish_important_event(race, overtake_event)
                     else:
                         lap_events.append(f"🚥 {driver_display_name(driver)} tentou ultrapassar {driver_display_name(target)} na volta {lap}, mas não conseguiu.")
+
+            # Compara a ordem antes e depois do trecho para narrar também ultrapassagens naturais.
+            updated_order = sorted([d for d in active if not d.retired], key=lambda d: d.total_time)
+            old_positions = {driver.user.id: index for index, driver in enumerate(pre_order)}
+            new_positions = {driver.user.id: index for index, driver in enumerate(updated_order)}
+            for driver in updated_order:
+                old_position = old_positions.get(driver.user.id)
+                new_position = new_positions.get(driver.user.id)
+                if old_position is None or new_position is None or new_position >= old_position:
+                    continue
+                passed = [
+                    other for other in pre_order
+                    if old_positions.get(other.user.id, 99) < old_position
+                    and new_positions.get(other.user.id, -1) > new_position
+                ]
+                if passed:
+                    names = ", ".join(driver_display_name(other) for other in passed)
+                    overtake_event = (
+                        f"↗️ **{driver_display_name(driver)} ultrapassou {names}** "
+                        f"na volta {lap}, trecho {segment_index}/{len(segments)}!"
+                    )
+                    lap_events.append(overtake_event)
+                    await publish_important_event(race, overtake_event)
             incident = any("acidente" in event.lower() or "abandono" in event.lower() for event in lap_events)
             still_running = [d for d in race.drivers.values() if not d.retired]
             if incident and len(still_running) > 1 and race.safety_car_laps == 0 and random.random() < 0.55:
