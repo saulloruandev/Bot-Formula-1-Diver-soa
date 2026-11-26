@@ -940,26 +940,11 @@ PILOT_ROLE_IDS = {
     'Juan Manuel Fangio': 1570225558036422757,  # ID do cargo de Juan Manuel Fangio
 }
 
-PROFILE_MIGRATION_VERSION = 2
-PROFILE_MIGRATION_BACKUP_FILE = PROFILE_FILE.with_name(
-    f"profiles.json.pre-migration-v{PROFILE_MIGRATION_VERSION}.bak"
-)
-
 def migrate_existing_profiles():
-    """Atualiza o formato dos perfis uma única vez, preservando dados e criando backup."""
+    """Normaliza perfis antigos e mantém somente o estilo atualmente equipado."""
     if not isinstance(USER_PROFILES, dict) or not USER_PROFILES:
         return
     changed = False
-    if PROFILE_FILE.exists() and not PROFILE_MIGRATION_BACKUP_FILE.exists():
-        try:
-            PROFILE_MIGRATION_BACKUP_FILE.write_text(
-                PROFILE_FILE.read_text(encoding="utf-8"), encoding="utf-8"
-            )
-            print(f"🛡️ Backup da migração criado: {PROFILE_MIGRATION_BACKUP_FILE.name}")
-        except OSError as exc:
-            print(f"⚠️ Migração cancelada: não foi possível criar backup ({exc}).")
-            return
-
     styles_by_name = {item["name"].casefold(): item for item in PILOT_STYLES}
     for profile in USER_PROFILES.values():
         if not isinstance(profile, dict):
@@ -969,59 +954,42 @@ def migrate_existing_profiles():
         if old_skills != new_skills:
             profile["skills"] = new_skills
             changed = True
-
         defaults = {
             "age": None, "team": "", "photo_url": "", "spins": 0,
-            "style_collection": [], "equipped_style": None,
+            "equipped_style": None, "equipped_style_data": None,
             "skip_roll_gamepass": False, "skip_roll_active": False,
             "ability": None, "ability_collection": [], "ability_spins": 0,
-            "pending_ability_roll": None, "skills_locked": True,
+            "pending_ability_roll": None, "skills_locked": False, "pending_roll": None,
         }
         for key, value in defaults.items():
             if key not in profile:
                 profile[key] = value.copy() if isinstance(value, (dict, list)) else value
                 changed = True
-
-        # Não substitui habilidade antiga por uma aleatória: preserva o nome e a coleção.
         if profile.get("ability") and profile["ability"] not in profile["ability_collection"]:
             profile["ability_collection"].append(profile["ability"])
             changed = True
-
-        # Atualiza os bônus dos estilos já obtidos para o formato de seis atributos.
-        collection = profile.get("style_collection")
-        if not isinstance(collection, list):
-            collection = []
-            profile["style_collection"] = collection
-            changed = True
-        for index, owned_style in enumerate(collection):
-            if not isinstance(owned_style, dict):
-                continue
-            current = styles_by_name.get(str(owned_style.get("name", "")).casefold())
-            if current:
-                updated = {**owned_style, **current}
-                if updated != owned_style:
-                    collection[index] = updated
-                    changed = True
-
-        equipped = profile.get("equipped_style")
-        if equipped:
-            current = styles_by_name.get(str(equipped).casefold())
-            if current and not any(
-                isinstance(item, dict) and item.get("name") == current["name"]
-                for item in collection
-            ):
-                collection.append(dict(current))
+        equipped_name = profile.get("equipped_style")
+        legacy_collection = profile.get("style_collection", [])
+        if not equipped_name and isinstance(legacy_collection, list) and legacy_collection:
+            equipped_name = next((item.get("name") for item in legacy_collection if isinstance(item, dict) and item.get("name")), None)
+            if equipped_name:
+                profile["equipped_style"] = equipped_name
                 changed = True
-
+        current = styles_by_name.get(str(equipped_name or "").casefold())
+        if current and profile.get("equipped_style_data") != current:
+            profile["equipped_style_data"] = dict(current)
+            changed = True
+        if "style_collection" in profile:
+            profile.pop("style_collection", None)
+            changed = True
         profile["ability_spins"] = max(0, int(profile.get("ability_spins") or 0))
         profile["spins"] = max(0, int(profile.get("spins") or 0))
-
     if changed:
         try:
             write_profiles_file()
-            print("✅ Perfis migrados para o formato de seis atributos.")
+            print("Perfis migrados para estilo único.")
         except OSError as exc:
-            print(f"⚠️ Não foi possível salvar a migração dos perfis: {exc}")
+            print(f"Falha ao salvar migração dos perfis: {exc}")
 
 migrate_existing_profiles()
 
@@ -1057,32 +1025,45 @@ async def sync_pilot_role(guild, member, style_name):
         return target_role, f"Falha ao sincronizar cargos no Discord: {exc}"
 
 async def equip_style_consistently(guild, member, profile, style):
-    """Equipa um estilo sem apagar os demais estilos já pertencentes ao jogador."""
+    """Substitui o único estilo ativo do jogador."""
     role, warning = await sync_pilot_role(guild, member, style.get("name"))
     profile["equipped_style"] = style["name"]
-    collection = profile.setdefault("style_collection", [])
-    if not any(isinstance(item, dict) and item.get("name") == style["name"] for item in collection):
-        collection.append(dict(style))
+    profile["equipped_style_data"] = dict(style)
+    profile.pop("style_collection", None)
     save_profiles()
     return role, warning
 
 def gacha_profile(user_id: int):
     is_new_profile = str(user_id) not in USER_PROFILES
-    profile = USER_PROFILES.setdefault(str(user_id), {
-        "name": "", "age": None, "team": "", "photo_url": "",
-        "skills": dict(PROFILE_PRESETS["balanced"]["skills"]),
-        "spins": 0, "style_collection": [], "equipped_style": None,
-        "skip_roll_gamepass": False, "skip_roll_active": False,
-        "skills_locked": False, "ability": random.choice(list(ABILITY_CATALOG)),
-    })
-    profile.setdefault("age", None); profile.setdefault("team", ""); profile.setdefault("photo_url", "")
-    profile.setdefault("spins", 0); profile.setdefault("style_collection", [])
-    profile.setdefault("equipped_style", None); profile.setdefault("skip_roll_gamepass", False)
+    if is_new_profile:
+        starter_style = dict(roll_style())
+        profile = {
+            "name": "", "age": None, "team": "", "photo_url": "",
+            "skills": dict(PROFILE_PRESETS["balanced"]["skills"]),
+            "spins": 0, "equipped_style": starter_style["name"],
+            "equipped_style_data": starter_style,
+            "skip_roll_gamepass": False, "skip_roll_active": False,
+            "skills_locked": False, "ability": random.choice(list(ABILITY_CATALOG)),
+        }
+        USER_PROFILES[str(user_id)] = profile
+    else:
+        profile = USER_PROFILES[str(user_id)]
+    profile.setdefault("age", None)
+    profile.setdefault("team", "")
+    profile.setdefault("photo_url", "")
+    profile.setdefault("spins", 0)
+    profile.setdefault("equipped_style", None)
+    profile.setdefault("skip_roll_gamepass", False)
     profile.setdefault("skip_roll_active", False)
     profile["skills"] = migrate_skill_distribution(profile.get("skills"))
     profile.setdefault("ability", random.choice(list(ABILITY_CATALOG)))
     profile.setdefault("ability_collection", [profile["ability"]] if profile.get("ability") else [])
     profile.setdefault("ability_spins", 0)
+    profile.pop("style_collection", None)
+    if profile.get("equipped_style") and not profile.get("equipped_style_data"):
+        profile["equipped_style_data"] = next(
+            (dict(item) for item in PILOT_STYLES if item["name"] == profile["equipped_style"]), None
+        )
     if is_new_profile:
         save_profiles()
     return profile
@@ -1260,7 +1241,7 @@ class LobbyView(discord.ui.View):
             profile = gacha_profile(interaction.user.id)
             saved_skills = profile.get("skills", PROFILE_PRESETS["balanced"]["skills"])
             equipped = profile.get("equipped_style")
-            style = next((s for s in profile.get("style_collection", []) if s.get("name") == equipped), None)
+            style = profile.get("equipped_style_data") or next((s for s in PILOT_STYLES if s["name"] == equipped), None)
             bonuses = (style or {}).get("skills", {})
             driver = Driver(
                 user=interaction.user, race_name=profile.get("name") or interaction.user.display_name,
@@ -1984,24 +1965,17 @@ class InventoryView(discord.ui.View):
     def __init__(self,owner_id): super().__init__(timeout=180); self.owner_id=owner_id
     @discord.ui.button(label="Equipar estilo",emoji="🏎️",style=discord.ButtonStyle.primary)
     async def equip(self,interaction,button):
-        if interaction.user.id!=self.owner_id: return await interaction.response.send_message("Esse inventário não é seu.",ephemeral=True)
-        profile=gacha_profile(self.owner_id); collection=profile["style_collection"]
-        if not collection: return await interaction.response.send_message("Inventário sem estilos.",ephemeral=True)
-        opts=[]
-        seen=set()
-        for style in collection:
-            if style["name"] not in seen: opts.append(discord.SelectOption(label=style["name"],description=style["rarity"],value=style["name"]));seen.add(style["name"])
-        select=discord.ui.Select(placeholder="Selecione um estilo para equipar",options=opts[:25])
-        async def cb(inter):
-            if inter.user.id!=self.owner_id: return await inter.response.send_message("Esse seletor não é seu.",ephemeral=True)
-            chosen=next(s for s in profile["style_collection"] if s["name"]==select.values[0])
-            role, warning = await equip_style_consistently(inter.guild, inter.user, profile, chosen)
-            note = f"Estilo equipado: **{chosen['name']}** {role.mention if role else '(cargo sem ID configurado)'}."
-            if warning: note += f"\n⚠️ {warning}"
-            await inter.response.send_message(note, ephemeral=True)
-        select.callback=cb; view=discord.ui.View(timeout=120);view.add_item(select)
-        await interaction.response.send_message("Escolha o estilo:",view=view,ephemeral=True)
-
+        if interaction.user.id!=self.owner_id:
+            return await interaction.response.send_message("Esse inventário não é seu.",ephemeral=True)
+        profile=gacha_profile(self.owner_id)
+        style=profile.get("equipped_style_data")
+        if not style:
+            return await interaction.response.send_message("Você ainda não possui estilo equipado.",ephemeral=True)
+        await interaction.response.send_message(
+            f"Seu único estilo ativo é **{style['name']}** ({style['rarity']}). "
+            "Ao aceitar outro estilo, ele substituirá este.",
+            ephemeral=True,
+        )
 
     @discord.ui.button(label="Ativar Pular Giro", emoji="⏭️", style=discord.ButtonStyle.success, row=1)
     async def activate_gamepass(self, interaction, button):
@@ -2049,7 +2023,7 @@ class ProfileSkillsModal(discord.ui.Modal, title="Distribuir 10 pontos pessoais"
             driver.braking = skills["qualifying"]
             driver.acceleration = skills["engine"]
             driver.ready = False
-        await interaction.response.send_message("✅ Distribuição salva. Você pode ajustá-la novamente enquanto o lobby estiver aberto.", ephemeral=True)
+        await interaction.response.send_message("✅ Distribuição salva no seu perfil. Você pode alterá-la novamente quando quiser, mesmo fora de uma corrida.", ephemeral=True)
         await refresh_profile_message(interaction, self.source_message_id, profile)
 
 class ProfileView(discord.ui.View):
@@ -2086,8 +2060,6 @@ class ProfileView(discord.ui.View):
     async def distribute(self, interaction, button):
         if interaction.user.id != self.owner_id: return await interaction.response.send_message("Esse botão não é seu.", ephemeral=True)
         profile = gacha_profile(self.owner_id)
-        if profile.get("skills_locked"):
-            return await interaction.response.send_message("Para mudar seus atributos, entre em um lobby e use Configurar carro antes da classificação.", ephemeral=True)
         modal=ProfileSkillsModal(self.owner_id); modal.source_message_id=interaction.message.id; await interaction.response.send_modal(modal)
     @discord.ui.button(label="Inventário",emoji="🎒",style=discord.ButtonStyle.secondary,row=0)
     async def inventory(self,interaction,button):
@@ -2096,7 +2068,8 @@ class ProfileView(discord.ui.View):
         gp="Sim" if profile.get("skip_roll_gamepass") else "Não"
         active="Ativa" if profile.get("skip_roll_gamepass") and profile.get("skip_roll_active") else "Desativada"
         lines=[f"**Giros de estilo:** {profile['spins']}",f"**Giros de habilidade:** {profile.get('ability_spins', 0)}",f"**Habilidade equipada:** {profile.get('ability') or 'Nenhuma'}",f"**Habilidades obtidas:** {', '.join(profile.get('ability_collection', [])) or 'Nenhuma'}",f"**Estilo equipado:** {equipped}",f"**Gamepass Pular Giro:** {gp} • {active}","**Estilos possuídos:**"]
-        lines += [f"{RARITY_DATA[s['rarity']]['emoji']} {s['name']} — {s['rarity']}" for s in profile['style_collection']]
+        active_style = profile.get('equipped_style_data')
+        lines.append(f"**Estilo ativo:** {active_style['name']} — {active_style['rarity']}" if active_style else "**Estilo ativo:** Nenhum")
         embed=discord.Embed(title="🎒 Inventário do piloto",description="\n".join(lines),color=discord.Color.blurple())
         await interaction.response.send_message(embed=embed,view=InventoryView(self.owner_id),ephemeral=True)
 
@@ -2174,16 +2147,28 @@ class RollConfirmView(discord.ui.View):
             msg = f"🗑️ **{self.style_data['name']}** recusado e descartado. Seu estilo equipado permanece o mesmo."
         profile.pop("pending_roll", None); save_profiles()
         rarity = RARITY_DATA[self.style_data["rarity"]]
-        result_embed = discord.Embed(title=f"{rarity['emoji']} Resultado: {self.style_data['name']}", description=f"**{self.style_data['rarity']}** • {self.style_data.get('trait','')}\n\nA mensagem continua disponível. Você pode girar novamente pelo botão abaixo.", color=rarity["color"])
+        skill_lines = "\n".join(
+            f"{emoji} **{label}:** {self.style_data.get('skills', {}).get(STYLE_SKILL_MAP.get(key), 0)}"
+            for key, label, emoji in SKILL_FIELDS
+        )
+        result_embed = discord.Embed(
+            title=f"{rarity['emoji']} CARTA DE ESTILO: {self.style_data['name']}",
+            description=f"**{self.style_data['rarity']}** • {self.style_data.get('trait','')}\n\n{skill_lines}\n\n"
+                        + ("Este é seu único estilo ativo. Um próximo estilo aceito substituirá este."
+                           if accept else "Resultado recusado. A carta fica no histórico da conversa, mas seu estilo ativo não muda."),
+            color=rarity["color"],
+        )
+        style_url = style_image_url(self.style_data["name"])
+        if style_url:
+            result_embed.set_image(url=style_url)
         await interaction.response.edit_message(content=msg, embed=result_embed, view=GachaRollView(self.owner_id))
-        # Move the persistent roll panel to the bottom of the channel after an action.
+        # A carta sorteada não é apagada: o novo painel é enviado abaixo dela.
         panel_embed = discord.Embed(title="🎰 Gacha de estilos da F1", description=(
-            f"**Giros disponíveis: {profile['spins']}**\nClique para girar. O estilo só entra no inventário após Aceitar.\n\n" +
+            f"**Giros disponíveis: {profile['spins']}**\nAo aceitar, o novo estilo substitui o atual.\n\n" +
             "\n".join(f"{RARITY_DATA[r]['emoji']} **{r}** — {RARITY_DATA[r]['chance']}% • {RARITY_DATA[r]['points']} pontos" for r in RARITY_DATA)
         ), color=discord.Color.purple())
         try:
-            fresh_panel = await interaction.channel.send(embed=panel_embed, view=GachaRollView(self.owner_id))
-            await interaction.message.delete()
+            await interaction.channel.send(embed=panel_embed, view=GachaRollView(self.owner_id))
         except discord.HTTPException:
             pass
     @discord.ui.button(label="Aceitar",emoji="✅",style=discord.ButtonStyle.success)
@@ -2198,9 +2183,26 @@ class ShopView(discord.ui.View):
 
 @bot.command(name="roll-estilo")
 async def roll_style_command(ctx):
-    profile=gacha_profile(ctx.author.id)
-    embed=discord.Embed(title="🎰 Gacha de estilos da F1",description=(f"**Giros disponíveis: {profile['spins']}**\nClique para girar. O estilo só entra no inventário após Aceitar.\n\n"+"\n".join(f"{RARITY_DATA[r]['emoji']} **{r}** — {RARITY_DATA[r]['chance']}% • {RARITY_DATA[r]['points']} pontos" for r in RARITY_DATA)),color=discord.Color.purple())
-    await ctx.send(embed=embed,view=GachaRollView(ctx.author.id))
+    is_new_profile = str(ctx.author.id) not in USER_PROFILES
+    profile = gacha_profile(ctx.author.id)
+    starter_style = profile.get("equipped_style_data")
+    description = (
+        f"**Giros disponíveis: {profile['spins']}**\n"
+        + (f"🎁 **Estilo inicial gratuito:** {starter_style['name']} ({starter_style['rarity']})\n\n" if is_new_profile and starter_style else
+           f"**Estilo atual:** {starter_style['name']} ({starter_style['rarity']})\n\n" if starter_style else "")
+        + "Clique para girar. Ao aceitar um novo estilo, ele substitui o atual.\n\n"
+        + "\n".join(f"{RARITY_DATA[r]['emoji']} **{r}** — {RARITY_DATA[r]['chance']}% • {RARITY_DATA[r]['points']} pontos" for r in RARITY_DATA)
+    )
+    embed = discord.Embed(title="🎰 Gacha de estilos da F1", description=description, color=discord.Color.purple())
+    if starter_style:
+        image_url = style_image_url(starter_style["name"])
+        if image_url:
+            embed.set_image(url=image_url)
+    if is_new_profile:
+        role, warning = await sync_pilot_role(ctx.guild, ctx.author, starter_style["name"])
+        if warning:
+            embed.add_field(name="Aviso de cargo", value=warning, inline=False)
+    await ctx.send(embed=embed, view=GachaRollView(ctx.author.id))
 
 @bot.command(name="transferir-giros")
 async def transfer_style_spins(ctx, jogador: discord.Member, quantidade: int):
@@ -2336,12 +2338,15 @@ async def pending_ability_command(ctx):
 
 @bot.command(name="colecao-estilos")
 async def style_collection_command(ctx):
-    profile=gacha_profile(ctx.author.id); collection=profile["style_collection"]
-    if not collection: return await ctx.send("Sua coleção está vazia. Use `!roll-estilo` para tentar obter um estilo.")
-    counts={}
-    for style in collection: counts[(style["rarity"],style["name"])]=counts.get((style["rarity"],style["name"]),0)+1
-    lines=[f"{RARITY_DATA[r]['emoji']} **{n}** — {r} ×{c}" for (r,n),c in sorted(counts.items(),key=lambda x:(list(RARITY_DATA).index(x[0][0]),x[0][1]))]
-    await ctx.send(embed=discord.Embed(title="🏆 Coleção de estilos",description="\n".join(lines),color=discord.Color.blurple()))
+    profile=gacha_profile(ctx.author.id)
+    style=profile.get("equipped_style_data")
+    if not style:
+        return await ctx.send("Você ainda não possui estilo equipado.")
+    await ctx.send(embed=discord.Embed(
+        title=f"{RARITY_DATA[style['rarity']]['emoji']} Seu estilo atual: {style['name']}",
+        description=f"**{style['rarity']}** • {style.get('trait', '')}\nEste é seu único estilo ativo.",
+        color=RARITY_DATA[style["rarity"]]["color"],
+    ))
 
 # Slash commands are administrator-only; purchases are authorized manually out-of-band.
 COMPROVANTE_CHANNEL_ID = 1570301822940487690
@@ -2499,9 +2504,8 @@ async def sincronizar_estilo(interaction: discord.Interaction, jogador: discord.
 
     profile = gacha_profile(jogador.id)
     profile["equipped_style"] = style_name
-    collection = profile.setdefault("style_collection", [])
-    if not any(isinstance(item, dict) and item.get("name") == style_name for item in collection):
-        collection.append(dict(style))
+    profile["equipped_style_data"] = dict(style)
+    profile.pop("style_collection", None)
     save_profiles()
     await interaction.response.send_message(
         f"✅ Perfil de {jogador.mention} sincronizado com o cargo **{style_name}**.",
@@ -2537,17 +2541,17 @@ async def gamepass_perfil(interaction: discord.Interaction,ativa: bool):
     profile["skip_roll_active"]=ativa; save_profiles()
     await interaction.response.send_message(f"Gamepass Pular Giro {'ativada' if ativa else 'desativada'} no seu perfil.",ephemeral=True)
 
-@bot.tree.command(name="equipar_estilo",description="Equipa um estilo que você possui")
-@app_commands.describe(estilo="Nome exato do estilo no inventário")
-async def equipar_estilo(interaction: discord.Interaction,estilo: str):
+@bot.tree.command(name="equipar_estilo",description="Mostra seu estilo atualmente equipado")
+async def equipar_estilo(interaction: discord.Interaction):
     profile=gacha_profile(interaction.user.id)
-    if not any(s.get("name","").casefold()==estilo.casefold() for s in profile["style_collection"]):
-        return await interaction.response.send_message("Você não possui esse estilo.",ephemeral=True)
-    found=next(s for s in profile["style_collection"] if s["name"].casefold()==estilo.casefold())
-    role, warning = await equip_style_consistently(interaction.guild, interaction.user, profile, found)
-    note = f"🏎️ Estilo equipado: **{found['name']}** {role.mention if role else '(cargo ainda sem ID configurado)'}."
-    if warning: note += f"\n⚠️ {warning}"
-    await interaction.response.send_message(note, ephemeral=True)
+    style=profile.get("equipped_style_data")
+    if not style:
+        return await interaction.response.send_message("Você ainda não possui estilo equipado.",ephemeral=True)
+    await interaction.response.send_message(
+        f"Seu estilo ativo é **{style['name']}** ({style['rarity']}). "
+        "Para trocar, aceite um novo resultado em !roll-estilo.",
+        ephemeral=True,
+    )
 
 
 
@@ -2820,8 +2824,7 @@ def style_image_url(style_name):
 
 def build_profile_embed(profile, member, guild):
     equipped = profile.get("equipped_style")
-    collection = profile.get("style_collection", [])
-    style = next((item for item in collection if item.get("name") == equipped), None)
+    style = profile.get("equipped_style_data") or next((item for item in PILOT_STYLES if item["name"] == equipped), None)
     role_id = PILOT_ROLE_IDS.get(equipped) if equipped else None
     role = guild.get_role(role_id) if guild and role_id else None
     style_label = role.mention if role else (f"**{equipped}** (cargo não configurado)" if equipped else "Nenhum estilo equipado")
@@ -2853,10 +2856,12 @@ def build_profile_embed(profile, member, guild):
     desc += "\n\n**⚙️ Atributos finais (pessoal + estilo)**\n"
     desc += " • ".join(f"{label}: {int(personal.get(key, 0)) + style_values.get(key, 0)}" for key, label, _ in SKILL_FIELDS)
     embed = discord.Embed(title="🏎️ Perfil do piloto", description=desc, color=discord.Color.orange())
-    image_url = style_image_url(equipped) if equipped else None
-    image_url = image_url or profile.get("photo_url")
-    if image_url:
-        embed.set_image(url=image_url)
+    photo_url = profile.get("photo_url")
+    if photo_url and photo_url.startswith(("https://", "http://")):
+        embed.set_thumbnail(url=photo_url)
+    style_url = style_image_url(equipped) if equipped else None
+    if style_url:
+        embed.set_image(url=style_url)
     return embed
 
 
@@ -2977,9 +2982,8 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     if profile.get("equipped_style") == style_name:
         return
     profile["equipped_style"] = style_name
-    collection = profile.setdefault("style_collection", [])
-    if not any(isinstance(item, dict) and item.get("name") == style_name for item in collection):
-        collection.append(dict(style))
+    profile["equipped_style_data"] = dict(style)
+    profile.pop("style_collection", None)
     try:
         save_profiles()
         print(f"🔄 Estilo de {after} sincronizado pelo cargo: {style_name}.")
