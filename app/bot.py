@@ -2183,9 +2183,26 @@ class ShopView(discord.ui.View):
 
 @bot.command(name="roll-estilo")
 async def roll_style_command(ctx):
-    profile=gacha_profile(ctx.author.id)
-    embed=discord.Embed(title="🎰 Gacha de estilos da F1",description=(f"**Giros disponíveis: {profile['spins']}**\nClique para girar. O estilo só entra no inventário após Aceitar.\n\n"+"\n".join(f"{RARITY_DATA[r]['emoji']} **{r}** — {RARITY_DATA[r]['chance']}% • {RARITY_DATA[r]['points']} pontos" for r in RARITY_DATA)),color=discord.Color.purple())
-    await ctx.send(embed=embed,view=GachaRollView(ctx.author.id))
+    is_new_profile = str(ctx.author.id) not in USER_PROFILES
+    profile = gacha_profile(ctx.author.id)
+    starter_style = profile.get("equipped_style_data")
+    description = (
+        f"**Giros disponíveis: {profile['spins']}**\n"
+        + (f"🎁 **Estilo inicial gratuito:** {starter_style['name']} ({starter_style['rarity']})\n\n" if is_new_profile and starter_style else
+           f"**Estilo atual:** {starter_style['name']} ({starter_style['rarity']})\n\n" if starter_style else "")
+        + "Clique para girar. Ao aceitar um novo estilo, ele substitui o atual.\n\n"
+        + "\n".join(f"{RARITY_DATA[r]['emoji']} **{r}** — {RARITY_DATA[r]['chance']}% • {RARITY_DATA[r]['points']} pontos" for r in RARITY_DATA)
+    )
+    embed = discord.Embed(title="🎰 Gacha de estilos da F1", description=description, color=discord.Color.purple())
+    if starter_style:
+        image_url = style_image_url(starter_style["name"])
+        if image_url:
+            embed.set_image(url=image_url)
+    if is_new_profile:
+        role, warning = await sync_pilot_role(ctx.guild, ctx.author, starter_style["name"])
+        if warning:
+            embed.add_field(name="Aviso de cargo", value=warning, inline=False)
+    await ctx.send(embed=embed, view=GachaRollView(ctx.author.id))
 
 @bot.command(name="transferir-giros")
 async def transfer_style_spins(ctx, jogador: discord.Member, quantidade: int):
