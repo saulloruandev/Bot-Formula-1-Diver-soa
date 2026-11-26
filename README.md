@@ -47,6 +47,10 @@ Inicie uma temporada com `!iniciartemporada Nome`. Ao terminar cada corrida, o r
 
 Pontuação: 1º = 10, 2º = 7, 3º = 5, 4º = 3, 5º = 1. A volta mais rápida vale +1 ponto somente para quem terminar no top 3. Abandonos e corridas canceladas não pontuam.
 
+## Transmissão, pneus e pódio
+
+A transmissão separa o painel de corrida do rádio de acontecimentos. Ultrapassagens registram quem passou quem, em qual volta e trecho; eventos importantes são publicados abaixo do painel mais recente. No lobby, **Configurar carro** abre uma tela interativa com os seis atributos identificados, os pontos atuais e um seletor para alterar cada valor. Pit stops têm 18 segundos de tempo-base e uma perda adicional variável da equipe. Pneus inadequados para o clima causam perda de ritmo, desgaste e risco de incidente maiores. Ao final, o bot monta uma arte de pódio com as fotos cadastradas nos perfis (ou os avatares do Discord como alternativa).
+
 ## Imagens dos eventos
 
 Os arquivos são opcionais. Consulte `app/assets/eventos/README.md` para os nomes esperados. Sem uma imagem local, o evento continua sendo mostrado em texto no painel da corrida.
