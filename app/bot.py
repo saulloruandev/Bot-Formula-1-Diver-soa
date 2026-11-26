@@ -971,8 +971,8 @@ def migrate_existing_profiles():
             if key not in profile:
                 profile[key] = value.copy() if isinstance(value, (dict, list)) else value
                 changed = True
-        if profile.get("ability") and profile["ability"] not in profile["ability_collection"]:
-            profile["ability_collection"].append(profile["ability"])
+        if "ability_collection" in profile:
+            profile.pop("ability_collection", None)
             changed = True
         equipped_name = profile.get("equipped_style")
         legacy_collection = profile.get("style_collection", [])
@@ -1063,7 +1063,7 @@ def gacha_profile(user_id: int):
     profile.setdefault("skip_roll_active", False)
     profile["skills"] = migrate_skill_distribution(profile.get("skills"))
     profile.setdefault("ability", random.choice(list(ABILITY_CATALOG)))
-    profile.setdefault("ability_collection", [profile["ability"]] if profile.get("ability") else [])
+    profile.pop("ability_collection", None)
     profile.setdefault("ability_spins", 0)
     profile.pop("style_collection", None)
     if profile.get("equipped_style") and not profile.get("equipped_style_data"):
@@ -1801,6 +1801,7 @@ EVENT_ASSET_DIR = Path(__file__).parent / "assets" / "eventos"
 EVENT_LINKS_FILE = EVENT_ASSET_DIR / "links.json"
 EVENT_IMAGE_RULES = {
     "ultrapassagem": ("ultrapassagem", "↗️"),
+    "ultrapassou": ("ultrapassagem", "↗️"),
     "acidente": ("colisao", "💥"),
     "derrapagem": ("rodada", "🌀"),
     "ESTOURO DE PNEU": ("pneu_estourado", "🛞"),
@@ -1893,15 +1894,18 @@ async def build_podium_file(order):
 
     async def download_photo(driver):
         profile = USER_PROFILES.get(str(driver.user.id), {})
-        url = profile.get("photo_url") or str(driver.user.display_avatar.url)
-        try:
-            timeout = aiohttp.ClientTimeout(total=8)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        return await response.read()
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
-            pass
+        urls = [profile.get("photo_url"), str(driver.user.display_avatar.url)]
+        timeout = aiohttp.ClientTimeout(total=8)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for url in urls:
+                if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+                    continue
+                try:
+                    async with session.get(url) as response:
+                        if response.status == 200:
+                            return await response.read()
+                except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+                    continue
         return None
 
     photos = await asyncio.gather(*(download_photo(driver) for driver in podium_drivers))
@@ -2435,9 +2439,7 @@ class AbilityRollConfirmView(discord.ui.View):
             return await interaction.response.send_message("Resultado pendente não encontrado.", ephemeral=True)
         if accept:
             profile["ability"] = self.ability_name
-            owned = profile.setdefault("ability_collection", [])
-            if self.ability_name not in owned:
-                owned.append(self.ability_name)
+            profile.pop("ability_collection", None)
             message = f"✨ Habilidade **{self.ability_name}** equipada com sucesso!"
         else:
             message = f"🗑️ Habilidade **{self.ability_name}** recusada. Sua habilidade anterior foi mantida."
