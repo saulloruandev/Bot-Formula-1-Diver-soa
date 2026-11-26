@@ -2145,16 +2145,28 @@ class RollConfirmView(discord.ui.View):
             msg = f"🗑️ **{self.style_data['name']}** recusado e descartado. Seu estilo equipado permanece o mesmo."
         profile.pop("pending_roll", None); save_profiles()
         rarity = RARITY_DATA[self.style_data["rarity"]]
-        result_embed = discord.Embed(title=f"{rarity['emoji']} Resultado: {self.style_data['name']}", description=f"**{self.style_data['rarity']}** • {self.style_data.get('trait','')}\n\nA mensagem continua disponível. Você pode girar novamente pelo botão abaixo.", color=rarity["color"])
+        skill_lines = "\n".join(
+            f"{emoji} **{label}:** {self.style_data.get('skills', {}).get(STYLE_SKILL_MAP.get(key), 0)}"
+            for key, label, emoji in SKILL_FIELDS
+        )
+        result_embed = discord.Embed(
+            title=f"{rarity['emoji']} CARTA DE ESTILO: {self.style_data['name']}",
+            description=f"**{self.style_data['rarity']}** • {self.style_data.get('trait','')}\n\n{skill_lines}\n\n"
+                        + ("Este é seu único estilo ativo. Um próximo estilo aceito substituirá este."
+                           if accept else "Resultado recusado. A carta fica no histórico da conversa, mas seu estilo ativo não muda."),
+            color=rarity["color"],
+        )
+        style_url = style_image_url(self.style_data["name"])
+        if style_url:
+            result_embed.set_image(url=style_url)
         await interaction.response.edit_message(content=msg, embed=result_embed, view=GachaRollView(self.owner_id))
-        # Move the persistent roll panel to the bottom of the channel after an action.
+        # A carta sorteada não é apagada: o novo painel é enviado abaixo dela.
         panel_embed = discord.Embed(title="🎰 Gacha de estilos da F1", description=(
-            f"**Giros disponíveis: {profile['spins']}**\nClique para girar. O estilo só entra no inventário após Aceitar.\n\n" +
+            f"**Giros disponíveis: {profile['spins']}**\nAo aceitar, o novo estilo substitui o atual.\n\n" +
             "\n".join(f"{RARITY_DATA[r]['emoji']} **{r}** — {RARITY_DATA[r]['chance']}% • {RARITY_DATA[r]['points']} pontos" for r in RARITY_DATA)
         ), color=discord.Color.purple())
         try:
-            fresh_panel = await interaction.channel.send(embed=panel_embed, view=GachaRollView(self.owner_id))
-            await interaction.message.delete()
+            await interaction.channel.send(embed=panel_embed, view=GachaRollView(self.owner_id))
         except discord.HTTPException:
             pass
     @discord.ui.button(label="Aceitar",emoji="✅",style=discord.ButtonStyle.success)
