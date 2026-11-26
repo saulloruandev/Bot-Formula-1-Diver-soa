@@ -1226,6 +1226,129 @@ class TireView(discord.ui.View):
         self.add_item(TireSelect(race, user_id))
 
 
+def car_setup_embed(driver, selected_attribute=None):
+    embed = discord.Embed(
+        title="⚙️ Configuração do carro",
+        description=(
+            "Escolha um atributo no primeiro menu e defina seus pontos no segundo. "
+            "Você pode distribuir até **10 pontos no total**. Os nomes e valores atuais aparecem abaixo."
+        ),
+        color=discord.Color.blurple(),
+    )
+    for key, label, emoji in SKILL_FIELDS:
+        value = getattr(driver, key)
+        selected = " ◀ selecionado" if key == selected_attribute else ""
+        embed.add_field(name=f"{emoji} {label}{selected}", value=f"**{value} ponto(s)**", inline=True)
+    embed.add_field(
+        name="📊 Total distribuído",
+        value=f"**{driver.total_skills}/{SKILL_POINTS} pontos**",
+        inline=False,
+    )
+    embed.set_footer(text="Para ficar pronto, distribua exatamente 10 pontos e escolha seus pneus.")
+    return embed
+
+
+class CarAttributeSelect(discord.ui.Select):
+    def __init__(self, view):
+        self.setup_view = view
+        driver = view.race.drivers[view.user_id]
+        options = [
+            discord.SelectOption(
+                label=label,
+                value=key,
+                emoji=emoji,
+                description=f"Atualmente: {getattr(driver, key)} ponto(s)",
+            )
+            for key, label, emoji in SKILL_FIELDS
+        ]
+        super().__init__(placeholder="1º — Escolha qual atributo configurar", options=options, row=0)
+
+    async def callback(self, interaction):
+        view = self.setup_view
+        if interaction.user.id != view.user_id:
+            return await interaction.response.send_message("Essa configuração pertence a outro piloto.", ephemeral=True)
+        if race_for_channel(interaction.channel_id) is not view.race or view.race.started:
+            return await interaction.response.send_message("O lobby não está mais disponível.", ephemeral=True)
+        view.selected_attribute = self.values[0]
+        view.points_select.refresh_options()
+        driver = view.race.drivers[view.user_id]
+        await interaction.response.edit_message(
+            embed=car_setup_embed(driver, view.selected_attribute),
+            view=view,
+        )
+
+
+class CarPointsSelect(discord.ui.Select):
+    def __init__(self, view):
+        self.setup_view = view
+        options = [discord.SelectOption(label=f"{value} ponto(s)", value=str(value)) for value in range(SKILL_POINTS + 1)]
+        super().__init__(placeholder="2º — Escolha quantos pontos atribuir", options=options, row=1)
+
+    def refresh_options(self):
+        view = self.setup_view
+        driver = view.race.drivers[view.user_id]
+        current = getattr(driver, view.selected_attribute) if view.selected_attribute else None
+        self.options = [
+            discord.SelectOption(
+                label=f"{value} ponto(s)",
+                value=str(value),
+                default=value == current,
+            )
+            for value in range(SKILL_POINTS + 1)
+        ]
+
+    async def callback(self, interaction):
+        view = self.setup_view
+        if interaction.user.id != view.user_id:
+            return await interaction.response.send_message("Essa configuração pertence a outro piloto.", ephemeral=True)
+        if race_for_channel(interaction.channel_id) is not view.race or view.race.started:
+            return await interaction.response.send_message("O lobby não está mais disponível.", ephemeral=True)
+        if not view.selected_attribute:
+            return await interaction.response.send_message("Escolha primeiro o atributo que deseja configurar.", ephemeral=True)
+
+        driver = view.race.drivers[view.user_id]
+        attribute = view.selected_attribute
+        new_value = int(self.values[0])
+        old_value = getattr(driver, attribute)
+        new_total = driver.total_skills - old_value + new_value
+        if new_total > SKILL_POINTS:
+            return await interaction.response.send_message(
+                f"Você ficaria com {new_total}/{SKILL_POINTS} pontos. Reduza outro atributo antes.",
+                ephemeral=True,
+            )
+
+        setattr(driver, attribute, new_value)
+        if attribute == "speed":
+            driver.straights = new_value
+        elif attribute == "qualifying":
+            driver.braking = new_value
+        elif attribute == "engine":
+            driver.acceleration = new_value
+        driver.ready = False
+
+        profile = gacha_profile(view.user_id)
+        profile.setdefault("skills", {})[attribute] = new_value
+        save_profiles()
+
+        self.refresh_options()
+        await interaction.response.edit_message(
+            embed=car_setup_embed(driver, attribute),
+            view=view,
+        )
+
+
+class CarSetupView(discord.ui.View):
+    def __init__(self, race, user_id):
+        super().__init__(timeout=180)
+        self.race = race
+        self.user_id = user_id
+        self.selected_attribute = None
+        self.attribute_select = CarAttributeSelect(self)
+        self.points_select = CarPointsSelect(self)
+        self.add_item(self.attribute_select)
+        self.add_item(self.points_select)
+
+
 class LobbyView(discord.ui.View):
     def __init__(self, race):
         super().__init__(timeout=None)
@@ -1269,8 +1392,12 @@ class LobbyView(discord.ui.View):
     async def configure(self, interaction, button):
         if not self.active(interaction) or interaction.user.id not in self.race.drivers:
             return await interaction.response.send_message("Entre no lobby antes.", ephemeral=True)
-        modal = ProfileSkillsModal(interaction.user.id, race=self.race)
-        await interaction.response.send_modal(modal)
+        driver = self.race.drivers[interaction.user.id]
+        await interaction.response.send_message(
+            embed=car_setup_embed(driver),
+            view=CarSetupView(self.race, interaction.user.id),
+            ephemeral=True,
+        )
 
     @discord.ui.button(label="Escolher pneus", emoji="🛞", style=discord.ButtonStyle.secondary, row=0)
     async def tires(self, interaction, button):
