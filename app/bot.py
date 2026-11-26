@@ -1851,6 +1851,97 @@ async def flush_race_broadcasts(race):
         except (discord.HTTPException, OSError):
             continue
 
+async def build_podium_file(order):
+    """Monta uma arte de pódio com as fotos cadastradas ou avatares do Discord."""
+    podium_drivers = [driver for driver in order if not driver.retired][:3]
+    if not podium_drivers:
+        return None
+
+    width, height = 1200, 680
+    canvas = Image.new("RGB", (width, height), (13, 20, 34))
+    pixels = canvas.load()
+    for y in range(height):
+        blend = y / max(1, height - 1)
+        color = (int(13 + 10 * blend), int(20 + 12 * blend), int(34 + 22 * blend))
+        for x in range(width):
+            pixels[x, y] = color
+
+    draw = ImageDraw.Draw(canvas)
+    try:
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 46)
+        name_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 25)
+        small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+        rank_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 34)
+    except OSError:
+        title_font = name_font = small_font = rank_font = ImageFont.load_default()
+
+    draw.text((width // 2, 48), "PÓDIO • F1 DISCORD RACING", font=title_font, fill=(245, 248, 255), anchor="mm")
+    draw.text((width // 2, 103), "RESULTADO OFICIAL DA CORRIDA", font=small_font, fill=(155, 177, 205), anchor="mm")
+
+    layout = {
+        1: (455, 300, 290, 275, (242, 190, 65)),
+        2: (145, 375, 290, 200, (190, 205, 222)),
+        3: (765, 420, 290, 155, (190, 125, 78)),
+    }
+
+    async def download_photo(driver):
+        profile = USER_PROFILES.get(str(driver.user.id), {})
+        url = profile.get("photo_url") or str(driver.user.display_avatar.url)
+        try:
+            timeout = aiohttp.ClientTimeout(total=8)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        return await response.read()
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+            pass
+        return None
+
+    photos = await asyncio.gather(*(download_photo(driver) for driver in podium_drivers))
+    for position, (driver, photo_data) in enumerate(zip(podium_drivers, photos), 1):
+        x, y, box_width, box_height, accent = layout[position]
+        center = x + box_width // 2
+        avatar_size = 132
+        avatar_y = y - 160
+        draw.ellipse((center - avatar_size // 2 - 7, avatar_y - 7,
+                      center + avatar_size // 2 + 7, avatar_y + avatar_size + 7),
+                     fill=accent)
+        if photo_data:
+            try:
+                avatar = Image.open(BytesIO(photo_data)).convert("RGB")
+                avatar = ImageOps.fit(avatar, (avatar_size, avatar_size), method=Image.Resampling.LANCZOS)
+            except (OSError, ValueError):
+                avatar = None
+        else:
+            avatar = None
+        if avatar is None:
+            avatar = Image.new("RGB", (avatar_size, avatar_size), (48, 62, 82))
+            avatar_draw = ImageDraw.Draw(avatar)
+            initials = "".join(part[0] for part in driver_display_name(driver).split()[:2]).upper() or "F1"
+            avatar_draw.text((avatar_size // 2, avatar_size // 2), initials, font=rank_font,
+                             fill=(255, 255, 255), anchor="mm")
+        mask = Image.new("L", (avatar_size, avatar_size), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, avatar_size, avatar_size), fill=255)
+        canvas.paste(avatar, (center - avatar_size // 2, avatar_y), mask)
+
+        draw.rounded_rectangle((x, y, x + box_width, y + box_height), radius=24,
+                               fill=(28, 40, 59), outline=accent, width=5)
+        draw.text((center, y + 38), f"P{position}", font=rank_font, fill=accent, anchor="mm")
+        name = driver_display_name(driver)
+        if len(name) > 20:
+            name = name[:19] + "…"
+        draw.text((center, y + 92), name, font=name_font, fill=(248, 250, 255), anchor="mm")
+        draw.text((center, y + 135), format_time(driver.total_time), font=small_font,
+                  fill=(184, 199, 219), anchor="mm")
+        draw.text((center, y + 170), TIRES[driver.tire]["label"], font=small_font,
+                  fill=(184, 199, 219), anchor="mm")
+
+    output = BytesIO()
+    canvas.save(output, format="PNG", optimize=True)
+    output.seek(0)
+    return discord.File(output, filename="podio-f1.png")
+
+
 async def run_race(race):
     race.race_started = True
     grid = sorted(race.drivers.values(), key=lambda d: d.grid_position or 99)
@@ -1991,10 +2082,13 @@ async def run_race(race):
     title = "🏁 VITÓRIA ANTECIPADA" if race.early_finish else "🏆 FIM DE CORRIDA — RESULTADO FINAL"
     embed = discord.Embed(title=title, description=podium or "Corrida encerrada sem pilotos classificados.", color=discord.Color.gold())
     embed.set_footer(text=f"{race.circuit_name} • {race.current_lap}/{race.total_laps} voltas • corrida concluída")
+    podium_file = await build_podium_file(final_order)
+    if podium_file:
+        embed.set_image(url="attachment://podio-f1.png")
     if race.message:
-        await race.message.edit(embed=embed, view=ClosedView())
+        await race.message.edit(embed=embed, view=ClosedView(), attachments=[podium_file] if podium_file else [])
     else:
-        await race.channel.send(embed=embed)
+        await race.channel.send(embed=embed, file=podium_file) if podium_file else await race.channel.send(embed=embed)
     await flush_race_broadcasts(race)
     races.pop(race.channel_id, None)
 
@@ -2055,7 +2149,7 @@ class InventoryView(discord.ui.View):
         await interaction.response.send_message("⏸️ Gamepass Pular Giro desativada no seu perfil.", ephemeral=True)
 
 class ProfileSkillsModal(discord.ui.Modal, title="Distribuir 10 pontos pessoais"):
-    distribution = discord.ui.TextInput(label="Pontos na ordem indicada", placeholder="1, 2, 2, 1, 2, 2", max_length=30, required=True)
+    distribution = discord.ui.TextInput(label="Ordem dos 6 atributos", placeholder="Pneus, Curvas, Velocidade, Classificação, Motor, Controle", max_length=30, required=True)
     def __init__(self, owner_id, race=None):
         super().__init__(); self.owner_id = owner_id; self.source_message_id = None; self.race = race
         profile = gacha_profile(owner_id)
@@ -2068,7 +2162,7 @@ class ProfileSkillsModal(discord.ui.Modal, title="Distribuir 10 pontos pessoais"
             if len(values) != 6: raise ValueError
             skills = {field[0]: value for field, value in zip(SKILL_FIELDS, values)}
         except ValueError:
-            return await interaction.response.send_message("Informe seis números inteiros separados por vírgula, na ordem exibida no perfil.", ephemeral=True)
+            return await interaction.response.send_message("Informe seis números na ordem: Gerenciamento de pneus, Curvas, Velocidade, Classificação, Motor e Controle.", ephemeral=True)
         if any(value < 0 or value > 10 for value in skills.values()) or sum(skills.values()) != SKILL_POINTS:
             return await interaction.response.send_message(f"Os seis atributos devem ser inteiros entre 0 e 10 e somar {SKILL_POINTS}.", ephemeral=True)
         profile = gacha_profile(self.owner_id); profile["skills"] = skills; profile["skills_locked"] = True; save_profiles()
@@ -2124,9 +2218,14 @@ class ProfileView(discord.ui.View):
         profile=gacha_profile(self.owner_id); equipped=profile.get("equipped_style") or "Nenhum"
         gp="Sim" if profile.get("skip_roll_gamepass") else "Não"
         active="Ativa" if profile.get("skip_roll_gamepass") and profile.get("skip_roll_active") else "Desativada"
-        lines=[f"**Giros de estilo:** {profile['spins']}",f"**Giros de habilidade:** {profile.get('ability_spins', 0)}",f"**Habilidade equipada:** {profile.get('ability') or 'Nenhuma'}",f"**Habilidades obtidas:** {', '.join(profile.get('ability_collection', [])) or 'Nenhuma'}",f"**Estilo equipado:** {equipped}",f"**Gamepass Pular Giro:** {gp} • {active}","**Estilos possuídos:**"]
         active_style = profile.get('equipped_style_data')
-        lines.append(f"**Estilo ativo:** {active_style['name']} — {active_style['rarity']}" if active_style else "**Estilo ativo:** Nenhum")
+        lines=[
+            f"**🎲 Giros de estilo:** {profile['spins']}",
+            f"**✨ Giros de habilidade:** {profile.get('ability_spins', 0)}",
+            f"**🧠 Habilidade equipada:** {profile.get('ability') or 'Nenhuma'}",
+            f"**🏎️ Estilo ativo:** {active_style['name']} — {active_style['rarity']}" if active_style else "**🏎️ Estilo ativo:** Nenhum",
+            f"**⏭️ Gamepass Pular Giro:** {gp} • {active}",
+        ]
         embed=discord.Embed(title="🎒 Inventário do piloto",description="\n".join(lines),color=discord.Color.blurple())
         await interaction.response.send_message(embed=embed,view=InventoryView(self.owner_id),ephemeral=True)
 
