@@ -1642,12 +1642,16 @@ def standings_embed(race, lap, segment_label, events):
         color=discord.Color.blue(),
     )
     embed.add_field(name="🌦️ Condições da pista", value=f"**{race.weather_name}** • {race.surface} • Ambiente {race.ambient_temp}°C • Pista {race.track_temp}°C", inline=False)
-    if events:
-        event_text = "\n".join(events[-12:])
-        if len(event_text) > 1000:
-            event_text = event_text[:997] + "..."
-        embed.add_field(name="📺 Transmissão — acontecimentos da volta", value=event_text, inline=False)
     return embed
+
+
+def add_transmission_field(embed, events):
+    if not events:
+        return
+    event_text = "\n".join(f"• {event}" for event in events[-8:])
+    if len(event_text) > 1000:
+        event_text = event_text[:997] + "..."
+    embed.add_field(name="📻 Rádio da corrida — acontecimentos", value=event_text, inline=False)
 
 
 
@@ -1749,6 +1753,7 @@ def decision_status_embed(race, active, segment_title, events):
     embed = standings_embed(race, race.current_lap, segment_title, events)
     statuses = [f"{'✅ Pronto' if d.chosen_action is not None else '⏳ Aguardando'} — **{driver_display_name(d)}**" for d in active]
     embed.add_field(name="🎮 Status das decisões", value="\n".join(statuses) or "Nenhum piloto ativo", inline=False)
+    add_transmission_field(embed, events)
     embed.set_footer(text=f"Escolhas ocultas até todos confirmarem • prazo: {race.decision_seconds}s")
     return embed
 
@@ -1765,6 +1770,7 @@ async def update_race_panel(race, active, segment_title, events, show_decision=F
             await old_message.delete()
         except discord.HTTPException:
             pass
+        await flush_race_broadcasts(race)
 
 
 def reveal_decisions_embed(race, active, segment_title, events):
@@ -1780,6 +1786,7 @@ def reveal_decisions_embed(race, active, segment_title, events):
         suffix = " (automático: Seguro)" if driver.chosen_action is None else ""
         lines.append(f"**{driver_display_name(driver)}:** {' + '.join(parts)}{suffix}")
     embed.add_field(name="🔓 Decisões reveladas", value="\n".join(lines) or "—", inline=False)
+    add_transmission_field(embed, events)
     return embed
 
 
@@ -1806,33 +1813,43 @@ def event_image_links():
         return {}
 
 async def publish_important_event(race, message):
-    lower = message.lower()
-    for keyword, (event_folder, emoji) in EVENT_IMAGE_RULES.items():
-        if keyword.lower() not in lower:
-            continue
-        folder = EVENT_ASSET_DIR / event_folder
-        local_images = []
-        if folder.exists():
-            local_images = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}]
-        links = event_image_links().get(event_folder, [])
-        if isinstance(links, str):
-            links = [links]
-        links = [url for url in links if isinstance(url, str) and url.startswith(("https://", "http://"))]
+    # Enfileira o acontecimento para ele ser publicado abaixo do painel mais recente.
+    race.pending_broadcasts.append(message)
+
+
+async def flush_race_broadcasts(race):
+    while race.pending_broadcasts:
+        message = race.pending_broadcasts.pop(0)
+        lower = message.lower()
+        emoji = "📻"
+        event_folder = None
+        for keyword, (folder_name, event_emoji) in EVENT_IMAGE_RULES.items():
+            if keyword.lower() in lower:
+                event_folder, emoji = folder_name, event_emoji
+                break
         try:
             embed = discord.Embed(description=message, color=discord.Color.orange())
-            if local_images:
-                asset = random.choice(local_images)
-                file = discord.File(asset, filename=asset.name)
-                embed.set_image(url=f"attachment://{asset.name}")
-                await race.channel.send(content=emoji, embed=embed, file=file)
-            elif links:
-                embed.set_image(url=random.choice(links))
-                await race.channel.send(content=emoji, embed=embed)
+            if event_folder:
+                folder = EVENT_ASSET_DIR / event_folder
+                local_images = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}] if folder.exists() else []
+                links = event_image_links().get(event_folder, [])
+                if isinstance(links, str):
+                    links = [links]
+                links = [url for url in links if isinstance(url, str) and url.startswith(("https://", "http://"))]
+                if local_images:
+                    asset = random.choice(local_images)
+                    file = discord.File(asset, filename=asset.name)
+                    embed.set_image(url=f"attachment://{asset.name}")
+                    await race.channel.send(content=emoji, embed=embed, file=file)
+                elif links:
+                    embed.set_image(url=random.choice(links))
+                    await race.channel.send(content=emoji, embed=embed)
+                else:
+                    await race.channel.send(content=f"{emoji} {message}")
             else:
                 await race.channel.send(content=f"{emoji} {message}")
-        except discord.HTTPException:
-            pass
-        return
+        except (discord.HTTPException, OSError):
+            continue
 
 async def run_race(race):
     race.race_started = True
