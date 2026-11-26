@@ -946,20 +946,10 @@ PROFILE_MIGRATION_BACKUP_FILE = PROFILE_FILE.with_name(
 )
 
 def migrate_existing_profiles():
-    """Atualiza o formato dos perfis uma única vez, preservando dados e criando backup."""
+    """Normaliza perfis antigos e mantém somente o estilo atualmente equipado."""
     if not isinstance(USER_PROFILES, dict) or not USER_PROFILES:
         return
     changed = False
-    if PROFILE_FILE.exists() and not PROFILE_MIGRATION_BACKUP_FILE.exists():
-        try:
-            PROFILE_MIGRATION_BACKUP_FILE.write_text(
-                PROFILE_FILE.read_text(encoding="utf-8"), encoding="utf-8"
-            )
-            print(f"🛡️ Backup da migração criado: {PROFILE_MIGRATION_BACKUP_FILE.name}")
-        except OSError as exc:
-            print(f"⚠️ Migração cancelada: não foi possível criar backup ({exc}).")
-            return
-
     styles_by_name = {item["name"].casefold(): item for item in PILOT_STYLES}
     for profile in USER_PROFILES.values():
         if not isinstance(profile, dict):
@@ -969,59 +959,35 @@ def migrate_existing_profiles():
         if old_skills != new_skills:
             profile["skills"] = new_skills
             changed = True
-
         defaults = {
             "age": None, "team": "", "photo_url": "", "spins": 0,
-            "style_collection": [], "equipped_style": None,
+            "equipped_style": None, "equipped_style_data": None,
             "skip_roll_gamepass": False, "skip_roll_active": False,
             "ability": None, "ability_collection": [], "ability_spins": 0,
-            "pending_ability_roll": None, "skills_locked": True,
+            "pending_ability_roll": None, "skills_locked": False, "pending_roll": None,
         }
         for key, value in defaults.items():
             if key not in profile:
                 profile[key] = value.copy() if isinstance(value, (dict, list)) else value
                 changed = True
-
-        # Não substitui habilidade antiga por uma aleatória: preserva o nome e a coleção.
         if profile.get("ability") and profile["ability"] not in profile["ability_collection"]:
             profile["ability_collection"].append(profile["ability"])
             changed = True
-
-        # Atualiza os bônus dos estilos já obtidos para o formato de seis atributos.
-        collection = profile.get("style_collection")
-        if not isinstance(collection, list):
-            collection = []
-            profile["style_collection"] = collection
+        current = styles_by_name.get(str(profile.get("equipped_style") or "").casefold())
+        if current and profile.get("equipped_style_data") != current:
+            profile["equipped_style_data"] = dict(current)
             changed = True
-        for index, owned_style in enumerate(collection):
-            if not isinstance(owned_style, dict):
-                continue
-            current = styles_by_name.get(str(owned_style.get("name", "")).casefold())
-            if current:
-                updated = {**owned_style, **current}
-                if updated != owned_style:
-                    collection[index] = updated
-                    changed = True
-
-        equipped = profile.get("equipped_style")
-        if equipped:
-            current = styles_by_name.get(str(equipped).casefold())
-            if current and not any(
-                isinstance(item, dict) and item.get("name") == current["name"]
-                for item in collection
-            ):
-                collection.append(dict(current))
-                changed = True
-
+        if "style_collection" in profile:
+            profile.pop("style_collection", None)
+            changed = True
         profile["ability_spins"] = max(0, int(profile.get("ability_spins") or 0))
         profile["spins"] = max(0, int(profile.get("spins") or 0))
-
     if changed:
         try:
             write_profiles_file()
-            print("✅ Perfis migrados para o formato de seis atributos.")
+            print("Perfis migrados para estilo único.")
         except OSError as exc:
-            print(f"⚠️ Não foi possível salvar a migração dos perfis: {exc}")
+            print(f"Falha ao salvar migração dos perfis: {exc}")
 
 migrate_existing_profiles()
 
@@ -1057,32 +1023,45 @@ async def sync_pilot_role(guild, member, style_name):
         return target_role, f"Falha ao sincronizar cargos no Discord: {exc}"
 
 async def equip_style_consistently(guild, member, profile, style):
-    """Equipa um estilo sem apagar os demais estilos já pertencentes ao jogador."""
+    """Substitui o único estilo ativo do jogador."""
     role, warning = await sync_pilot_role(guild, member, style.get("name"))
     profile["equipped_style"] = style["name"]
-    collection = profile.setdefault("style_collection", [])
-    if not any(isinstance(item, dict) and item.get("name") == style["name"] for item in collection):
-        collection.append(dict(style))
+    profile["equipped_style_data"] = dict(style)
+    profile.pop("style_collection", None)
     save_profiles()
     return role, warning
 
 def gacha_profile(user_id: int):
     is_new_profile = str(user_id) not in USER_PROFILES
-    profile = USER_PROFILES.setdefault(str(user_id), {
-        "name": "", "age": None, "team": "", "photo_url": "",
-        "skills": dict(PROFILE_PRESETS["balanced"]["skills"]),
-        "spins": 0, "style_collection": [], "equipped_style": None,
-        "skip_roll_gamepass": False, "skip_roll_active": False,
-        "skills_locked": False, "ability": random.choice(list(ABILITY_CATALOG)),
-    })
-    profile.setdefault("age", None); profile.setdefault("team", ""); profile.setdefault("photo_url", "")
-    profile.setdefault("spins", 0); profile.setdefault("style_collection", [])
-    profile.setdefault("equipped_style", None); profile.setdefault("skip_roll_gamepass", False)
+    if is_new_profile:
+        starter_style = dict(roll_style())
+        profile = {
+            "name": "", "age": None, "team": "", "photo_url": "",
+            "skills": dict(PROFILE_PRESETS["balanced"]["skills"]),
+            "spins": 0, "equipped_style": starter_style["name"],
+            "equipped_style_data": starter_style,
+            "skip_roll_gamepass": False, "skip_roll_active": False,
+            "skills_locked": False, "ability": random.choice(list(ABILITY_CATALOG)),
+        }
+        USER_PROFILES[str(user_id)] = profile
+    else:
+        profile = USER_PROFILES[str(user_id)]
+    profile.setdefault("age", None)
+    profile.setdefault("team", "")
+    profile.setdefault("photo_url", "")
+    profile.setdefault("spins", 0)
+    profile.setdefault("equipped_style", None)
+    profile.setdefault("skip_roll_gamepass", False)
     profile.setdefault("skip_roll_active", False)
     profile["skills"] = migrate_skill_distribution(profile.get("skills"))
     profile.setdefault("ability", random.choice(list(ABILITY_CATALOG)))
     profile.setdefault("ability_collection", [profile["ability"]] if profile.get("ability") else [])
     profile.setdefault("ability_spins", 0)
+    profile.pop("style_collection", None)
+    if profile.get("equipped_style") and not profile.get("equipped_style_data"):
+        profile["equipped_style_data"] = next(
+            (dict(item) for item in PILOT_STYLES if item["name"] == profile["equipped_style"]), None
+        )
     if is_new_profile:
         save_profiles()
     return profile
