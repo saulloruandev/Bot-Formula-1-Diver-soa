@@ -1912,26 +1912,30 @@ async def run_race(race):
                     lap_events.append(event_message)
                     if any(word in event_message.lower() for word in ("pit stop", "acidente", "derrapagem", "estouro de pneu", "abandono")):
                         await publish_important_event(race, event_message)
-            updated = sorted([d for d in active if not d.retired], key=lambda d: d.total_time)
-            for index in range(1, len(updated)):
-                driver, ahead = updated[index], updated[index-1]
+            for index, driver in enumerate(pre_order):
+                if index == 0 or driver.retired:
+                    continue
                 action = driver.chosen_action or {}
+                target = pre_order[index - 1]
                 prior_gap = gaps.get(driver.user.id)
                 if action.get("attack") and prior_gap is not None and prior_gap <= OVERTAKE_DETECTION_SECONDS:
                     chance = 0.22 + driver.effective_skill("straights") * 0.025 + driver.effective_skill("acceleration") * 0.018 + driver.effective_skill("control") * 0.008
                     if driver.ability in ("Ultrapassador Nato", "Especialista em DRS"):
                         chance += 0.035
-                    chance -= ahead.control * 0.012
-                    if ahead.ability == "Defensor Nato":
+                    chance -= target.control * 0.012
+                    if target.ability == "Defensor Nato":
                         chance -= 0.035
                     chance = max(0.08, min(0.68, chance))
-                    if random.random() < chance and driver.total_time > ahead.total_time:
-                        driver.total_time -= min(0.35, driver.total_time - ahead.total_time + 0.02)
-                        overtake_event = f"↗️ {driver_display_name(driver)} completou uma ultrapassagem!"
+                    gap_after_segment = driver.total_time - target.total_time
+                    if random.random() < chance and 0 < gap_after_segment <= 0.65:
+                        driver.total_time = target.total_time - 0.02
+                        overtake_event = (f"↗️ **{driver_display_name(driver)} ultrapassou "
+                                          f"{driver_display_name(target)}** na volta {lap}, "
+                                          f"trecho {segment_index}/{len(segments)}!")
                         lap_events.append(overtake_event)
                         await publish_important_event(race, overtake_event)
                     else:
-                        lap_events.append(f"🚥 {driver_display_name(driver)} tentou ultrapassar, mas não conseguiu.")
+                        lap_events.append(f"🚥 {driver_display_name(driver)} tentou ultrapassar {driver_display_name(target)} na volta {lap}, mas não conseguiu.")
             incident = any("acidente" in event.lower() or "abandono" in event.lower() for event in lap_events)
             still_running = [d for d in race.drivers.values() if not d.retired]
             if incident and len(still_running) > 1 and race.safety_car_laps == 0 and random.random() < 0.55:
@@ -1945,7 +1949,10 @@ async def run_race(race):
                 for position, driver in enumerate(ordered):
                     driver.total_time = leader_time + position * 0.45
             if race.message:
-                await race.message.edit(embed=standings_embed(race, lap, segment_title, lap_events), view=ClosedView())
+                panel_embed = standings_embed(race, lap, segment_title, lap_events)
+                add_transmission_field(panel_embed, lap_events)
+                await race.message.edit(embed=panel_embed, view=ClosedView())
+            await flush_race_broadcasts(race)
             still_active = [d for d in race.drivers.values() if not d.finished and not d.retired]
             if len(still_active) == 1:
                 still_active[0].finished = True
@@ -1954,7 +1961,10 @@ async def run_race(race):
                 lap_events.append(winner_event)
                 await publish_important_event(race, winner_event)
                 if race.message:
-                    await race.message.edit(embed=standings_embed(race, lap, "FIM ANTECIPADO", lap_events), view=ClosedView())
+                    panel_embed = standings_embed(race, lap, "FIM ANTECIPADO", lap_events)
+                    add_transmission_field(panel_embed, lap_events)
+                    await race.message.edit(embed=panel_embed, view=ClosedView())
+                await flush_race_broadcasts(race)
                 break
         for driver in race.drivers.values():
             if not driver.finished and not driver.retired:
@@ -1972,7 +1982,7 @@ async def run_race(race):
     if fastest:
         await publish_important_event(race, f"⏱️ Volta mais rápida: {driver_display_name(fastest)} — {format_time(fastest.best_lap_time)}")
     await register_championship_result(race, final_order, fastest)
-    podium = "\\n".join(
+    podium = "\n".join(
         f"**P{position} — {driver_display_name(driver)}** | Tempo: `{format_time(driver.total_time)}` | "
         f"{TIRES[driver.tire]['label']} • {driver.pit_stops} pit stop(s) • desgaste {driver.tire_wear:.0f}%"
         + (" • ⛔ Abandonou" if driver.retired else "")
@@ -1985,6 +1995,7 @@ async def run_race(race):
         await race.message.edit(embed=embed, view=ClosedView())
     else:
         await race.channel.send(embed=embed)
+    await flush_race_broadcasts(race)
     races.pop(race.channel_id, None)
 
 
