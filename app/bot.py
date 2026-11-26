@@ -1994,6 +1994,7 @@ async def run_race(race):
             segment_title = f"{segment.upper()} {segment_index}/{len(segments)}"
             race.current_decision_label = f"Volta {lap}/{race.total_laps} • {segment_title}"
             await update_race_panel(race, active, segment_title, lap_events, show_decision=True)
+            lap_events.clear()
             deadline = asyncio.get_running_loop().time() + (race.decision_seconds or 45)
             while any(driver.chosen_action is None for driver in active) and asyncio.get_running_loop().time() < deadline:
                 await asyncio.sleep(1)
@@ -2055,6 +2056,7 @@ async def run_race(race):
                 add_transmission_field(panel_embed, lap_events)
                 await race.message.edit(embed=panel_embed, view=ClosedView())
             await flush_race_broadcasts(race)
+            lap_events.clear()
             still_active = [d for d in race.drivers.values() if not d.finished and not d.retired]
             if len(still_active) == 1:
                 still_active[0].finished = True
