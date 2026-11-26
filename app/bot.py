@@ -940,11 +940,6 @@ PILOT_ROLE_IDS = {
     'Juan Manuel Fangio': 1570225558036422757,  # ID do cargo de Juan Manuel Fangio
 }
 
-PROFILE_MIGRATION_VERSION = 2
-PROFILE_MIGRATION_BACKUP_FILE = PROFILE_FILE.with_name(
-    f"profiles.json.pre-migration-v{PROFILE_MIGRATION_VERSION}.bak"
-)
-
 def migrate_existing_profiles():
     """Normaliza perfis antigos e mantém somente o estilo atualmente equipado."""
     if not isinstance(USER_PROFILES, dict) or not USER_PROFILES:
@@ -973,7 +968,14 @@ def migrate_existing_profiles():
         if profile.get("ability") and profile["ability"] not in profile["ability_collection"]:
             profile["ability_collection"].append(profile["ability"])
             changed = True
-        current = styles_by_name.get(str(profile.get("equipped_style") or "").casefold())
+        equipped_name = profile.get("equipped_style")
+        legacy_collection = profile.get("style_collection", [])
+        if not equipped_name and isinstance(legacy_collection, list) and legacy_collection:
+            equipped_name = next((item.get("name") for item in legacy_collection if isinstance(item, dict) and item.get("name")), None)
+            if equipped_name:
+                profile["equipped_style"] = equipped_name
+                changed = True
+        current = styles_by_name.get(str(equipped_name or "").casefold())
         if current and profile.get("equipped_style_data") != current:
             profile["equipped_style_data"] = dict(current)
             changed = True
@@ -2021,7 +2023,7 @@ class ProfileSkillsModal(discord.ui.Modal, title="Distribuir 10 pontos pessoais"
             driver.braking = skills["qualifying"]
             driver.acceleration = skills["engine"]
             driver.ready = False
-        await interaction.response.send_message("✅ Distribuição salva. Você pode ajustá-la novamente enquanto o lobby estiver aberto.", ephemeral=True)
+        await interaction.response.send_message("✅ Distribuição salva no seu perfil. Você pode alterá-la novamente quando quiser, mesmo fora de uma corrida.", ephemeral=True)
         await refresh_profile_message(interaction, self.source_message_id, profile)
 
 class ProfileView(discord.ui.View):
