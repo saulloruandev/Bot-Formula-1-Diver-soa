@@ -2702,7 +2702,7 @@ async def run_race(race):
         register_normal_result(race, final_order)
     human_drivers = [driver for driver in final_order if not getattr(driver, "is_bot", False)]
     bot_count = len(final_order) - len(human_drivers)
-    points_allowed = len(human_drivers) >= 3 and bot_count <= len(human_drivers)
+    points_allowed = len(human_drivers) >= 6 and bot_count <= len(human_drivers)
     if race.mode == "ranked":
         points_allowed = points_allowed and season_for(race.guild_id) is not None
         points_multiplier = 0.50 if race.total_laps <= 3 else 0.75 if race.total_laps <= 5 else 1.0
@@ -3562,7 +3562,7 @@ def register_normal_result(race, order):
     bot_count = len(order) - len(human_drivers)
     if race.mode != "casual" or race.race_id in NORMAL_RANKING.get("races", []):
         return
-    if len(human_drivers) < 3 or bot_count > len(human_drivers):
+    if len(human_drivers) < 6 or bot_count > len(human_drivers):
         return
     players = NORMAL_RANKING.setdefault("players", {})
     for position, driver in enumerate(order, 1):
@@ -3601,7 +3601,7 @@ async def register_championship_result(race, order, fastest):
         return
     human_drivers = [driver for driver in order if not getattr(driver, "is_bot", False)]
     bot_count = len(order) - len(human_drivers)
-    if len(human_drivers) < 3 or bot_count > len(human_drivers):
+    if len(human_drivers) < 6 or bot_count > len(human_drivers):
         return
     season = season_for(race.guild_id)
     if not season:
@@ -3832,7 +3832,7 @@ def system_embed(page):
         "• Seis atributos e 10 pontos redistribuíveis pelo perfil ou lobby.\n"
         "• Estilo e habilidade únicos equipados; um novo estilo aceito substitui o anterior.\n"
         "• Pneus, clima, desgaste, energia, pit stops e decisões influenciam a corrida. Cada piloto tem 2 jogos de pneus no total; pit stop sob Safety Car custa menos tempo e a neutralização dura mais uma volta completa.\n"
-        "• Adicione bots pelo lobby: eles têm nomes de pilotos conhecidos, estilos aleatórios e tomam decisões automaticamente. Corridas com menos de 3 humanos ou bots em maioria não pontuam.\n"
+        "• Adicione bots pelo lobby: eles têm nomes de pilotos conhecidos, estilos aleatórios e tomam decisões automaticamente. Corridas precisam de pelo menos 6 jogadores reais; bots não contam e também não podem ser maioria.\n"
         "• São 15 circuitos, cada um com uma prévia esquemática no lobby.\n"
         "• O pódio destaca foto, nome, tempo final e a volta mais rápida válida com o número da volta."
     )
@@ -3944,7 +3944,7 @@ async def help_f1(ctx):
                 "• Casual: 10, 8, 6, 5, 4, 3, 2 e 1 ponto(s) para as oito primeiras posições. Consulte !rankingnormal.\n"
                 "• Oficial: 1º = 10, 2º = 7, 3º = 5, 4º = 3 e 5º = 1 ponto; +1 pela volta mais rápida se terminar no top 3.\n"
                 "• Provas oficiais de até 3 voltas valem 50%; até 5 voltas, 75%; provas maiores, 100%. Abandono não pontua.\n"
-                "• Corridas com menos de 3 jogadores humanos ou com bots em maioria não pontuam. Bots nunca recebem pontos.\n\n"
+                "• São necessários pelo menos 6 jogadores reais para pontuar. Bots não contam para esse mínimo e não podem ser maioria. Bots nunca recebem pontos.\n\n"
                 "**Atributos**\n"
                 "• Gerenciamento de pneus reduz desgaste. Curvas melhora trechos técnicos. Velocidade favorece retas. Classificação melhora o grid. Motor ajuda na aceleração. Controle melhora disputas e reduz erros.\n\n"
                 "**Perfil e estilos**\n"
