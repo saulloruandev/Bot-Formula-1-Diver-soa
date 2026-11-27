@@ -23,7 +23,8 @@ F1_Discord_Racing/
 - `bot.py` (raiz): ponto de entrada.
 - `app/bot.py`: lógica principal do bot.
 - `app/profiles.json`: dados locais dos jogadores (criado automaticamente; ignorado pelo Git).
-- `app/campeonato.json`: histórico e pontuação das temporadas (criado automaticamente).
+- `app/campeonato.json`: histórico e pontuação das temporadas oficiais (criado automaticamente).
+- `app/ranking_normal.json`: pontuação e partidas das corridas casuais (criado automaticamente; ignorado pelo Git).
 - `app/assets/eventos/`: imagens opcionais para eventos importantes.
 - `.env`: token do Discord. Nunca envie esse arquivo ao GitHub.
 
@@ -41,15 +42,22 @@ Os dez pontos pessoais são distribuídos entre seis atributos: Gerenciamento de
 
 Cada jogador possui somente um estilo ativo: ao aceitar um novo resultado, o estilo anterior é substituído. Jogadores novos recebem um estilo aleatório gratuito na primeira criação do perfil. A carta do resultado permanece no canal e o perfil mostra a arte do estilo abaixo da foto pessoal (miniatura no canto superior direito). Os estilos do gacha mantêm as chances originais de raridade e distribuem bônus em seis atributos, incluindo gerenciamento de pneus. Cada raridade recebeu +1 ponto em relação à tabela anterior, e estilos comuns/incomuns podem ter atributos zerados para representar fraquezas reais. Membros podem transferir giros de estilo com `!transferir-giros @membro quantidade`. Habilidades podem ser sorteadas com `!roll-habilidade`; cada giro custa 25k sonhos e é liberado manualmente pelo administrador após pagamento.
 
+## Corridas casuais e oficiais
+
+O bot mantém dois modos independentes:
+
+- **Corrida casual — `!f1`:** lobby com até 10 pilotos. Pode haver vários lobbies simultâneos, inclusive no mesmo canal. Os resultados não alteram o campeonato; somam pontos e partidas no ranking normal (`!rankingnormal`). A pontuação casual é 10, 8, 6, 5, 4, 3, 2 e 1 ponto para as oito primeiras posições; as demais não pontuam. Todos os participantes têm a partida contabilizada.
+- **Corrida oficial — `!f1rank`:** lobby com até 5 pilotos. Exige uma temporada ativa e registra resultados no campeonato (`!ranking` e `!campeonato`). Pontuação oficial: 1º = 10, 2º = 7, 3º = 5, 4º = 3, 5º = 1. A volta mais rápida vale +1 ponto somente para quem terminar no top 3. Abandonos e corridas canceladas não pontuam.
+
+Cada lobby tem painel e identificador próprios. Se a classificação e a corrida não forem iniciadas em até 10 minutos, o lobby é encerrado automaticamente. O criador pode cancelar a própria corrida com `!f1cancel`; administradores podem cancelar a corrida de alguém usando `!f1cancel @criador`. Use `!f1status [@criador]` para consultar o estado dos lobbies no canal.
+
 ## Campeonato
 
-Inicie uma temporada com `!iniciartemporada Nome`. Ao terminar cada corrida, o resultado é salvo automaticamente. Consulte com `!campeonato`, `!ranking`, `!temporada`, `!resultado` e `!estatisticas`. Administradores podem encerrar com `!finalizartemporada` ou reiniciar os resultados da temporada ativa com `!resetcampeonato`.
-
-Pontuação: 1º = 10, 2º = 7, 3º = 5, 4º = 3, 5º = 1. A volta mais rápida vale +1 ponto somente para quem terminar no top 3. Abandonos e corridas canceladas não pontuam.
+Inicie uma temporada oficial com `!iniciartemporada Nome`. Ao terminar uma corrida `!f1rank`, o resultado é salvo automaticamente. Consulte com `!campeonato`, `!ranking`, `!temporada`, `!resultado` e `!estatisticas`. Administradores podem encerrar com `!finalizartemporada` ou reiniciar os resultados da temporada ativa com `!resetcampeonato`.
 
 ## Transmissão, pneus e pódio
 
-A transmissão separa o painel de corrida do rádio de acontecimentos. Ultrapassagens registram quem passou quem, em qual volta e trecho; eventos importantes são publicados abaixo do painel mais recente. No lobby, **Configurar carro** abre uma tela interativa com os seis atributos identificados, os pontos atuais e um seletor para alterar cada valor. Pit stops têm 18 segundos de tempo-base e uma perda adicional variável da equipe. Pneus inadequados para o clima causam perda de ritmo, desgaste e risco de incidente maiores. Ao final, o bot monta uma arte de pódio com as fotos cadastradas nos perfis (ou os avatares do Discord como alternativa).
+A transmissão separa o painel de corrida do rádio de acontecimentos. Ultrapassagens registram quem passou quem, em qual volta e trecho; eventos importantes são publicados abaixo do painel mais recente. No lobby, **Configurar carro** abre uma tela interativa com os seis atributos identificados, os pontos atuais e um seletor para alterar cada valor. Pit stops têm 18 segundos de tempo-base e uma perda adicional variável da equipe. Pneus inadequados para o clima causam perda de ritmo, desgaste e risco de incidente maiores. Ao final, o bot monta uma arte de pódio com fotos maiores, nome e tempo final de cada piloto (ou o avatar do Discord como alternativa).
 
 ## Imagens dos eventos
 
@@ -62,7 +70,7 @@ As imagens ficam em `app/assets/eventos/`, separadas por acontecimento. Adicione
 
 ## Central de informações
 
-Use `!sistema` no Discord para abrir o painel interativo com informações sobre estilos e bônus, pneus e clima, habilidades especiais, atributos, pilotagem e novidades do bot. `!perfil @membro` consulta o perfil de outro piloto. `!perfil @membro` consulta o perfil de outro piloto.
+Use `!sistema` no Discord para abrir o painel interativo com informações sobre estilos e bônus, pneus e clima, habilidades especiais, atributos, pilotagem, modalidades de corrida e rankings. `!perfil @membro` consulta o perfil de outro piloto.
 
 
 ## Persistência dos perfis dos jogadores

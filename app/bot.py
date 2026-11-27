@@ -19,7 +19,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 MIN_PLAYERS = 2
-MAX_PLAYERS = 5
+MAX_PLAYERS = 10
 TOTAL_LAPS = 10
 SKILL_POINTS = 10
 OVERTAKE_DETECTION_SECONDS = 1.0  # Ajuste para 1.5 para uma corrida mais casual
@@ -210,17 +210,21 @@ class Race:
     safety_car_laps: int = 0
     early_finish: bool = False
     pending_broadcasts: List[str] = field(default_factory=list)
+    race_id: str = field(default_factory=lambda: str(__import__("uuid").uuid4()))
+    mode: str = "casual"
+    max_players: int = 10
+    lobby_timeout_task: Optional[asyncio.Task] = None
 
     @property
     def full(self):
-        return len(self.drivers) >= MAX_PLAYERS
+        return len(self.drivers) >= self.max_players
 
     @property
     def all_ready(self):
         return len(self.drivers) >= MIN_PLAYERS and all(d.ready for d in self.drivers.values())
 
 
-races: Dict[int, Race] = {}
+races: Dict[str, Race] = {}
 
 # Dados mutáveis dos jogadores ficam fora do controle de versão.
 # O arquivo permanece em app/profiles.json na instalação local, mas é ignorado pelo Git.
@@ -1097,8 +1101,19 @@ def driver_display_name(driver: Driver):
     return driver.race_name or driver.user.display_name
 
 
-def race_for_channel(channel_id: int):
-    return races.get(channel_id)
+def races_for_channel(channel_id: int):
+    return [race for race in races.values() if race.channel_id == channel_id]
+
+def race_for_channel(channel_id: int, mode=None, host_id=None):
+    matches = races_for_channel(channel_id)
+    if mode is not None:
+        matches = [race for race in matches if race.mode == mode]
+    if host_id is not None:
+        matches = [race for race in matches if race.host_id == host_id]
+    return matches[-1] if matches else None
+
+def race_is_active(race: Race):
+    return races.get(race.race_id) is race
 
 
 def format_time(seconds: Optional[float]) -> str:
@@ -1126,19 +1141,22 @@ def weather_tire_penalty(tire_key: str, rain_level: float) -> float:
     return max(-0.15, (1.0 - multiplier) * 1.35)
 
 
-def lobby_embed(race: Race, title="🏁 F1 Discord Racing — Lobby", description=None):
+def lobby_embed(race: Race, title=None, description=None):
     circuit = CIRCUITS[race.circuit_name]
     embed = discord.Embed(
-        title=title,
-        description=description or f"**{race.circuit_name}** • {race.total_laps} voltas\nCircuito com retas e curvas.",
-        color=discord.Color.red(),
+        title=title or ("🏆 F1 Rank — Lobby oficial" if race.mode == "ranked" else "🏁 F1 Casual — Lobby"),
+        description=description or (
+            f"**{race.circuit_name}** • {race.total_laps} voltas\n"
+            + ("Corrida oficial da temporada." if race.mode == "ranked" else "Corrida casual — não altera o campeonato.")
+        ),
+        color=discord.Color.gold() if race.mode == "ranked" else discord.Color.red(),
     )
     embed.add_field(
         name="🌦️ Condições",
         value=f"**Clima:** {race.weather_name}\n**Ambiente:** {race.ambient_temp}°C\n**Pista:** {race.track_temp}°C ({race.surface})",
         inline=True,
     )
-    embed.add_field(name="👥 Lobby", value=f"**Pilotos:** {len(race.drivers)}/{MAX_PLAYERS}\n**Mínimo:** {MIN_PLAYERS}", inline=True)
+    embed.add_field(name="👥 Lobby", value=f"**Pilotos:** {len(race.drivers)}/{race.max_players}\n**Mínimo:** {MIN_PLAYERS}", inline=True)
     if race.drivers:
         rows = []
         for pos, driver in enumerate(race.drivers.values(), 1):
@@ -1153,7 +1171,7 @@ def lobby_embed(race: Race, title="🏁 F1 Discord Racing — Lobby", descriptio
         embed.add_field(name="🏎️ Pilotos e posições provisórias", value="\n".join(rows), inline=False)
     else:
         embed.add_field(name="🏎️ Pilotos", value="Ninguém entrou ainda.", inline=False)
-    embed.set_footer(text="Distribua 10 pontos (ajustáveis no lobby), escolha pneus e marque Estou pronto.")
+    embed.set_footer(text=f"{'Oficial • pontua na temporada' if race.mode == 'ranked' else 'Casual • ranking normal'} | Distribua 10 pontos, escolha pneus e marque Estou pronto.")
     return embed
 
 
@@ -1174,8 +1192,8 @@ class SkillSelect(discord.ui.Select):
     async def callback(self, interaction):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("Esse menu pertence a outro piloto.", ephemeral=True)
-        race = race_for_channel(interaction.channel_id)
-        if not race or race.started or self.user_id not in race.drivers:
+        race = self.race
+        if not race_is_active(race) or race.started or self.user_id not in race.drivers:
             return await interaction.response.send_message("Lobby indisponível.", ephemeral=True)
         driver = race.drivers[self.user_id]
         new_value = int(self.values[0])
@@ -1207,8 +1225,8 @@ class TireSelect(discord.ui.Select):
     async def callback(self, interaction):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("Esse menu pertence a outro piloto.", ephemeral=True)
-        race = race_for_channel(interaction.channel_id)
-        if not race or race.started or self.user_id not in race.drivers:
+        race = self.race
+        if not race_is_active(race) or race.started or self.user_id not in race.drivers:
             return await interaction.response.send_message("Lobby indisponível.", ephemeral=True)
         driver = race.drivers[self.user_id]
         driver.tire = self.values[0]
@@ -1267,7 +1285,7 @@ class CarAttributeSelect(discord.ui.Select):
         view = self.setup_view
         if interaction.user.id != view.user_id:
             return await interaction.response.send_message("Essa configuração pertence a outro piloto.", ephemeral=True)
-        if race_for_channel(interaction.channel_id) is not view.race or view.race.started:
+        if interaction.channel_id != view.race.channel_id or not race_is_active(view.race) or view.race.started:
             return await interaction.response.send_message("O lobby não está mais disponível.", ephemeral=True)
         driver = view.race.drivers.get(view.user_id)
         if driver is None:
@@ -1303,7 +1321,7 @@ class CarPointsSelect(discord.ui.Select):
         view = self.setup_view
         if interaction.user.id != view.user_id:
             return await interaction.response.send_message("Essa configuração pertence a outro piloto.", ephemeral=True)
-        if race_for_channel(interaction.channel_id) is not view.race or view.race.started:
+        if interaction.channel_id != view.race.channel_id or not race_is_active(view.race) or view.race.started:
             return await interaction.response.send_message("O lobby não está mais disponível.", ephemeral=True)
         if not view.selected_attribute:
             return await interaction.response.send_message("Escolha primeiro o atributo que deseja configurar.", ephemeral=True)
@@ -1359,8 +1377,7 @@ class LobbyView(discord.ui.View):
         self.race = race
 
     def active(self, interaction):
-        current = race_for_channel(interaction.channel_id)
-        return current is self.race and not current.started
+        return interaction.channel_id == self.race.channel_id and race_is_active(self.race) and not self.race.started
 
     @discord.ui.button(label="Entrar na corrida", emoji="🏎️", style=discord.ButtonStyle.success, row=0)
     async def join(self, interaction, button):
@@ -1370,7 +1387,7 @@ class LobbyView(discord.ui.View):
             if interaction.user.id in self.race.drivers:
                 return await interaction.response.send_message("Você já está inscrito.", ephemeral=True)
             if self.race.full:
-                return await interaction.response.send_message(f"Lobby cheio ({MAX_PLAYERS} pilotos).", ephemeral=True)
+                return await interaction.response.send_message(f"Lobby cheio ({self.race.max_players} pilotos).", ephemeral=True)
             profile = gacha_profile(interaction.user.id)
             saved_skills = profile.get("skills", PROFILE_PRESETS["balanced"]["skills"])
             equipped = profile.get("equipped_style")
@@ -1434,6 +1451,8 @@ class LobbyView(discord.ui.View):
     async def start_qualifying_button(self, interaction, button):
         if interaction.user.id != self.race.host_id:
             return await interaction.response.send_message("Somente o host pode iniciar a classificação.", ephemeral=True)
+        if not self.active(interaction):
+            return await interaction.response.send_message("Este lobby não está mais ativo.", ephemeral=True)
         ok, message = await start_qualifying(self.race)
         if not ok:
             return await interaction.response.send_message(f"⚠️ {message}", ephemeral=True)
@@ -1538,9 +1557,9 @@ class RaceDecisionView(discord.ui.View):
         self.add_item(button)
 
     async def record_choice(self, interaction, mode, attack=False, boost=False, line=None, pit=False, pit_tire=None):
-        race = race_for_channel(interaction.channel_id)
-        driver = race.drivers.get(interaction.user.id) if race else None
-        if race is not self.race or not race.race_started or driver is None or driver.finished or driver.retired:
+        race = self.race
+        driver = race.drivers.get(interaction.user.id) if race_is_active(race) else None
+        if interaction.channel_id != race.channel_id or not race.race_started or driver is None or driver.finished or driver.retired:
             return await interaction.response.send_message("Você não é um piloto ativo nesta corrida.", ephemeral=True)
         active = sorted([d for d in race.drivers.values() if not d.finished and not d.retired], key=lambda d: d.total_time)
         index = active.index(driver) if driver in active else 0
@@ -1801,11 +1820,13 @@ class QualifyingView(discord.ui.View):
 
     @discord.ui.button(label="Iniciar corrida", emoji="🚦", style=discord.ButtonStyle.success)
     async def begin_race(self, interaction, button):
-        race = race_for_channel(interaction.channel_id)
-        if race is not self.race or interaction.user.id != race.host_id:
+        race = self.race
+        if interaction.channel_id != race.channel_id or not race_is_active(race) or interaction.user.id != race.host_id:
             return await interaction.response.send_message("Somente o host desta corrida pode iniciar.", ephemeral=True)
         if not race.qualifying_done or race.race_started:
             return await interaction.response.send_message("A corrida ainda não está pronta para começar.", ephemeral=True)
+        if race.lobby_timeout_task and not race.lobby_timeout_task.done():
+            race.lobby_timeout_task.cancel()
         race.race_task = asyncio.create_task(run_race(race))
         await interaction.response.edit_message(content="🚦 Corrida iniciada! O painel será atualizado a cada trecho.", view=ClosedView())
 
@@ -1826,7 +1847,7 @@ class LobbyConfigSelect(discord.ui.Select):
         super().__init__(options=options, placeholder=placeholder, min_values=1, max_values=1)
 
     async def host_check(self, interaction):
-        if race_for_channel(interaction.channel_id) is not self.race:
+        if interaction.channel_id != self.race.channel_id or not race_is_active(self.race):
             await interaction.response.send_message("Lobby indisponível.", ephemeral=True)
             return False
         if interaction.user.id != self.race.host_id or self.race.started:
@@ -2007,15 +2028,14 @@ async def build_podium_file(order):
 
     draw = ImageDraw.Draw(canvas)
     try:
-        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 46)
-        name_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 25)
-        small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
-        rank_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 34)
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+        name_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
+        time_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 30)
+        fallback_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 34)
     except OSError:
-        title_font = name_font = small_font = rank_font = ImageFont.load_default()
+        title_font = name_font = time_font = fallback_font = ImageFont.load_default()
 
-    draw.text((width // 2, 48), "PÓDIO • F1 DISCORD RACING", font=title_font, fill=(245, 248, 255), anchor="mm")
-    draw.text((width // 2, 103), "RESULTADO OFICIAL DA CORRIDA", font=small_font, fill=(155, 177, 205), anchor="mm")
+    draw.text((width // 2, 58), "PÓDIO", font=title_font, fill=(245, 248, 255), anchor="mm")
 
     layout = {
         1: (455, 300, 290, 275, (242, 190, 65)),
@@ -2043,8 +2063,8 @@ async def build_podium_file(order):
     for position, (driver, photo_data) in enumerate(zip(podium_drivers, photos), 1):
         x, y, box_width, box_height, accent = layout[position]
         center = x + box_width // 2
-        avatar_size = 132
-        avatar_y = y - 160
+        avatar_size = 150
+        avatar_y = y - 175
         draw.ellipse((center - avatar_size // 2 - 7, avatar_y - 7,
                       center + avatar_size // 2 + 7, avatar_y + avatar_size + 7),
                      fill=accent)
@@ -2060,7 +2080,7 @@ async def build_podium_file(order):
             avatar = Image.new("RGB", (avatar_size, avatar_size), (48, 62, 82))
             avatar_draw = ImageDraw.Draw(avatar)
             initials = "".join(part[0] for part in driver_display_name(driver).split()[:2]).upper() or "F1"
-            avatar_draw.text((avatar_size // 2, avatar_size // 2), initials, font=rank_font,
+            avatar_draw.text((avatar_size // 2, avatar_size // 2), initials, font=fallback_font,
                              fill=(255, 255, 255), anchor="mm")
         mask = Image.new("L", (avatar_size, avatar_size), 0)
         ImageDraw.Draw(mask).ellipse((0, 0, avatar_size, avatar_size), fill=255)
@@ -2068,15 +2088,12 @@ async def build_podium_file(order):
 
         draw.rounded_rectangle((x, y, x + box_width, y + box_height), radius=24,
                                fill=(28, 40, 59), outline=accent, width=5)
-        draw.text((center, y + 38), f"P{position}", font=rank_font, fill=accent, anchor="mm")
         name = driver_display_name(driver)
-        if len(name) > 20:
-            name = name[:19] + "…"
-        draw.text((center, y + 92), name, font=name_font, fill=(248, 250, 255), anchor="mm")
-        draw.text((center, y + 135), format_time(driver.total_time), font=small_font,
-                  fill=(184, 199, 219), anchor="mm")
-        draw.text((center, y + 170), TIRES[driver.tire]["label"], font=small_font,
-                  fill=(184, 199, 219), anchor="mm")
+        if len(name) > 21:
+            name = name[:20] + "…"
+        draw.text((center, y + 76), name, font=name_font, fill=(248, 250, 255), anchor="mm")
+        draw.text((center, y + 132), format_time(driver.total_time), font=time_font,
+                  fill=(225, 233, 245), anchor="mm")
 
     output = BytesIO()
     canvas.save(output, format="PNG", optimize=True)
@@ -2086,6 +2103,8 @@ async def build_podium_file(order):
 
 async def run_race(race):
     race.race_started = True
+    if race.lobby_timeout_task and not race.lobby_timeout_task.done():
+        race.lobby_timeout_task.cancel()
     grid = sorted(race.drivers.values(), key=lambda d: d.grid_position or 99)
     for rank, driver in enumerate(grid):
         driver.total_time = rank * 0.25
@@ -2234,12 +2253,14 @@ async def run_race(race):
     fastest = min((d for d in final_order if d.best_lap_time is not None and not d.retired), key=lambda d: d.best_lap_time, default=None)
     if fastest:
         await publish_important_event(race, f"⏱️ Volta mais rápida: {driver_display_name(fastest)} — {format_time(fastest.best_lap_time)}")
-    await register_championship_result(race, final_order, fastest)
+    if race.mode == "ranked":
+        await register_championship_result(race, final_order, fastest)
+    else:
+        register_normal_result(race, final_order)
     podium = "\n".join(
-        f"**P{position} — {driver_display_name(driver)}** | Tempo: `{format_time(driver.total_time)}` | "
-        f"{TIRES[driver.tire]['label']} • {driver.pit_stops} pit stop(s) • desgaste {driver.tire_wear:.0f}%"
-        + (" • ⛔ Abandonou" if driver.retired else "")
-        for position, driver in enumerate(final_order, 1)
+        f"**{driver_display_name(driver)}** — `{format_time(driver.total_time)}`"
+        + (" • Abandonou" if driver.retired else "")
+        for driver in final_order
     )
     title = "🏁 VITÓRIA ANTECIPADA" if race.early_finish else "🏆 FIM DE CORRIDA — RESULTADO FINAL"
     embed = discord.Embed(title=title, description=podium or "Corrida encerrada sem pilotos classificados.", color=discord.Color.gold())
@@ -2255,17 +2276,49 @@ async def run_race(race):
         else:
             await race.channel.send(embed=embed)
     await flush_race_broadcasts(race)
-    races.pop(race.channel_id, None)
+    if race.lobby_timeout_task and not race.lobby_timeout_task.done():
+        race.lobby_timeout_task.cancel()
+    races.pop(race.race_id, None)
 
 
 
 
 class ProfileNameModal(discord.ui.Modal, title="Configurar perfil de piloto"):
-    pilot_name=discord.ui.TextInput(label="Nome exibido",max_length=32,required=True)
-    age=discord.ui.TextInput(label="Idade",placeholder="Ex.: 22",max_length=3,required=False)
-    team_name=discord.ui.TextInput(label="Equipe",max_length=32,required=False)
-    photo_url=discord.ui.TextInput(label="URL da foto do piloto",placeholder="https://...",max_length=300,required=False)
-    def __init__(self,owner_id,source_message_id=None): super().__init__(); self.owner_id=owner_id; self.source_message_id=source_message_id
+    def __init__(self, owner_id, source_message_id=None):
+        super().__init__()
+        self.owner_id = owner_id
+        self.source_message_id = source_message_id
+        profile = gacha_profile(owner_id)
+        self.pilot_name = discord.ui.TextInput(
+            label="Nome exibido",
+            default=str(profile.get("name") or "")[:32],
+            max_length=32,
+            required=True,
+        )
+        self.age = discord.ui.TextInput(
+            label="Idade",
+            placeholder="Ex.: 22",
+            default=str(profile.get("age") or "")[:3],
+            max_length=3,
+            required=False,
+        )
+        self.team_name = discord.ui.TextInput(
+            label="Equipe",
+            default=str(profile.get("team") or "")[:32],
+            max_length=32,
+            required=False,
+        )
+        self.photo_url = discord.ui.TextInput(
+            label="URL da foto do piloto",
+            placeholder="https://...",
+            default=str(profile.get("photo_url") or "")[:300],
+            max_length=300,
+            required=False,
+        )
+        self.add_item(self.pilot_name)
+        self.add_item(self.age)
+        self.add_item(self.team_name)
+        self.add_item(self.photo_url)
     async def on_submit(self,interaction):
         if interaction.user.id!=self.owner_id: return await interaction.response.send_message("Esse formulário não é seu.",ephemeral=True)
         profile=gacha_profile(self.owner_id); profile["name"]=str(self.pilot_name.value).strip() or interaction.user.display_name
@@ -2890,6 +2943,66 @@ def load_championship():
 
 CHAMPIONSHIP = load_championship()
 
+NORMAL_RANKING_FILE = Path(__file__).with_name("ranking_normal.json")
+NORMAL_RANKING_POINTS = {1: 10, 2: 8, 3: 6, 4: 5, 5: 4, 6: 3, 7: 2, 8: 1}
+
+def load_normal_ranking():
+    try:
+        if NORMAL_RANKING_FILE.exists():
+            data = json.loads(NORMAL_RANKING_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data.setdefault("players", {})
+                data.setdefault("races", [])
+                return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {"players": {}, "races": []}
+
+NORMAL_RANKING = load_normal_ranking()
+
+def save_normal_ranking():
+    NORMAL_RANKING_FILE.write_text(
+        json.dumps(NORMAL_RANKING, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+def normal_ranking_table(guild_id):
+    rows = [
+        row for row in NORMAL_RANKING.get("players", {}).values()
+        if str(row.get("guild_id")) == str(guild_id)
+    ]
+    return sorted(
+        rows,
+        key=lambda row: (row.get("points", 0), row.get("wins", 0), row.get("podiums", 0), row.get("races", 0)),
+        reverse=True,
+    )
+
+def register_normal_result(race, order):
+    if race.mode != "casual" or race.race_id in NORMAL_RANKING.get("races", []):
+        return
+    players = NORMAL_RANKING.setdefault("players", {})
+    for position, driver in enumerate(order, 1):
+        key = f"{race.guild_id}:{driver.user.id}"
+        row = players.setdefault(key, {
+            "guild_id": str(race.guild_id),
+            "user_id": str(driver.user.id),
+            "name": driver_display_name(driver),
+            "points": 0,
+            "wins": 0,
+            "podiums": 0,
+            "races": 0,
+        })
+        row["name"] = driver_display_name(driver)
+        row["races"] = row.get("races", 0) + 1
+        if not driver.retired:
+            row["points"] = row.get("points", 0) + NORMAL_RANKING_POINTS.get(position, 0)
+            if position == 1:
+                row["wins"] = row.get("wins", 0) + 1
+            if position <= 3:
+                row["podiums"] = row.get("podiums", 0) + 1
+    NORMAL_RANKING.setdefault("races", []).append(race.race_id)
+    save_normal_ranking()
+
 def save_championship():
     CHAMPIONSHIP_FILE.write_text(json.dumps(CHAMPIONSHIP, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -2898,10 +3011,12 @@ def season_for(guild_id):
     return CHAMPIONSHIP.get("seasons", {}).get(season_id) if season_id else None
 
 async def register_championship_result(race, order, fastest):
+    if race.mode != "ranked":
+        return
     season = season_for(race.guild_id)
     if not season:
         return
-    race_id = f"{race.guild_id}-{int(__import__('time').time())}-{race.channel_id}"
+    race_id = race.race_id
     if any(item.get("race_id") == race_id for item in season.get("races", [])):
         return
     results = []
@@ -2954,6 +3069,31 @@ async def championship_command(ctx):
 @bot.command(name="ranking")
 async def ranking_command(ctx):
     await championship_command(ctx)
+
+
+@bot.command(name="rankingnormal")
+async def normal_ranking_command(ctx):
+    if not ctx.guild:
+        return await ctx.send("O ranking normal só está disponível dentro de um servidor.")
+    rows = normal_ranking_table(ctx.guild.id)
+    if not rows:
+        return await ctx.send("Ainda não há corridas casuais registradas neste servidor.")
+    lines = [
+        f"**P{position} — {row['name']}** • {row.get('points', 0)} pts • "
+        f"{row.get('races', 0)} partidas • {row.get('wins', 0)} vitória(s)"
+        for position, row in enumerate(rows[:20], 1)
+    ]
+    own = next((row for row in rows if row["user_id"] == str(ctx.author.id)), None)
+    description = "\n".join(lines)
+    if own:
+        own_position = next(i for i, row in enumerate(rows, 1) if row["user_id"] == str(ctx.author.id))
+        description += (
+            f"\n\n**Sua posição:** P{own_position} • {own.get('points', 0)} pontos • "
+            f"{own.get('races', 0)} partidas jogadas."
+        )
+    embed = discord.Embed(title="🏁 Ranking das corridas casuais", description=description, color=discord.Color.blue())
+    embed.set_footer(text="Somente corridas !f1 contam neste ranking. Corridas oficiais ficam no !ranking.")
+    await ctx.send(embed=embed)
 
 @bot.command(name="temporada")
 async def season_command(ctx):
@@ -3041,22 +3181,24 @@ def system_embed(page):
         return discord.Embed(title="✨ Habilidades especiais", description="As habilidades passivas podem ser obtidas pela roleta `!roll-habilidade`, por 25k sonhos cada giro.\n\n" + "\n".join(lines), color=discord.Color.gold())
     if page == "pilotagem":
         mode_lines = [f"**{data['label']}** — ritmo {data['pace']:+.2f} • risco {data['risk']:+.2f} • defesa {data['defense']:+.2f} • ataque {data['attack']:+.2f}" for data in DRIVING_MODES.values()]
-        skill_lines = [f"{emoji} **{label}** — atributo pessoal; os 10 pontos são distribuídos uma vez e ficam bloqueados." for key, label, emoji in SKILL_FIELDS]
+        skill_lines = [f"{emoji} **{label}** — atributo pessoal; os 10 pontos podem ser redistribuídos pelo perfil ou no lobby." for key, label, emoji in SKILL_FIELDS]
         description = "**Atributos**\n" + "\n".join(skill_lines)
         description += "\n\n**Modos de pilotagem**\n" + "\n".join(mode_lines)
         description += "\n\n**Ações adicionais**\n• Overtake Mode: tenta ultrapassar quando há adversário elegível à frente.\n• Boost Mode: usa energia para buscar ritmo extra.\n• Decisões são privadas até todos os pilotos confirmarem."
         return discord.Embed(title="🏎️ Atributos e pilotagem", description=description, color=discord.Color.blue())
     description = (
-        "**Novidades desta versão**\n"
-        "• Seis atributos pessoais: gerenciamento de pneus, curvas, velocidade, classificação, motor e controle.\n"
-        "• Distribuição fixa de 10 pontos por piloto.\n"
-        "• Habilidades especiais obtidas pela roleta, por 25k sonhos cada giro.\n"
-        "• Campeonato com pontuação, histórico, ranking e estatísticas persistentes.\n"
-        "• Pontos do campeonato: 10 / 7 / 5 / 3 / 1; +1 pela volta mais rápida se terminar no top 3.\n"
-        "• Imagens de eventos configuráveis por pastas e links, com seleção aleatória.\n"
-        "• Circuitos, clima, pneus, desgaste, energia e decisões estratégicas influenciam a simulação.\n\n"
-        "**Comandos úteis**\n"
-        "f1 criar lobby • perfil ver piloto • roll-estilo girar estilo • campeonato consultar temporada • ranking ver classificação."
+        "**Modalidades de corrida**\n"
+        "• `!f1`: corrida casual com até 10 pilotos, lobbies simultâneos e ranking independente.\n"
+        "• `!f1rank`: corrida oficial com até 5 pilotos; exige temporada ativa e registra pontos no campeonato.\n"
+        "• Lobbies sem corrida iniciada expiram após 10 minutos. Administradores podem usar `!f1cancel @criador`.\n\n"
+        "**Rankings**\n"
+        "• `!rankingnormal`: pontos e partidas das corridas casuais.\n"
+        "• `!ranking` e `!campeonato`: classificação da temporada oficial.\n\n"
+        "**Piloto e simulação**\n"
+        "• Seis atributos e 10 pontos redistribuíveis pelo perfil ou lobby.\n"
+        "• Estilo e habilidade únicos equipados; um novo estilo aceito substitui o anterior.\n"
+        "• Pneus, clima, desgaste, energia, pit stops e decisões influenciam a corrida.\n"
+        "• O pódio destaca foto, nome e tempo final de cada piloto."
     )
     return discord.Embed(title="🆕 Novidades e sistemas", description=description, color=discord.Color.green())
 
@@ -3085,16 +3227,26 @@ async def system_command(ctx):
 async def commands_list(ctx):
     embed = discord.Embed(title="📜 Comandos do F1 Discord Racing", color=discord.Color.blue())
     embed.description = (
-        "`!f1` — cria um lobby; o host usa os botões do próprio painel para configurar, classificar e iniciar.\n"
-        "`!perfil [@membro]` — consulta seu perfil ou o de outro piloto.\n`!roll-estilo` — roleta gacha de estilos de pilotos F1.\n`!transferir-giros @membro quantidade` — transfere giros de estilo.\n`!roll-habilidade` — roleta de habilidades especiais (25k sonhos por giro).\n`!habilidade-pendente` — recupera um resultado pendente.\n`!roll-pendente` — recupera resultado aguardando confirmação.\n`!loja` — loja visual de giros (sonhos da Loritta; confirmação manual).\n`!colecao-estilos` — mostra estilos obtidos.\n`/adicionar_giros`, `/adicionar_giros_habilidade`, `/deletar_giros`, `/setar_estilo` e `/gamepass` — administração de giros/estilos/habilidades.\n"
-        "`!ajuda` — guia de funcionamento e explicação das estratégias.\n"
-        "`!campeonato` / `!ranking` / `!estatisticas` / `!temporada` / `!resultado` — consultar campeonato, etapa e desempenho.\n"
-        "`!iniciartemporada` / `!finalizartemporada` / `!resetcampeonato` — gestão de temporada (administradores).\n"
-        "`!sistema` — painel interativo com explicações de estilos, pneus, habilidades, atributos e novidades.\n"
-        "`!comandos` — exibe esta lista.\n"
-        "`!f1status` — mostra estado do lobby/corrida.\n"
-        "`!f1cancel` — cancela lobby/corrida (somente host).\n\n"
-        "Não existem mais `!f1start` e `!f1race`: classificação e início da corrida são feitos pelos botões no painel `!f1`."
+        "**CORRIDAS**\n"
+        "`!f1` — cria uma corrida casual com até 10 pilotos; não altera o campeonato.\n"
+        "`!f1rank` — cria uma corrida oficial com até 5 pilotos; exige temporada ativa e soma pontos no campeonato.\n"
+        "`!f1status [@criador]` — consulta os lobbies ativos neste canal ou o lobby de um criador específico.\n"
+        "`!f1cancel` — o criador cancela a própria corrida. Administradores podem usar `!f1cancel @criador`.\n"
+        "`!rankingnormal` — ranking de pontos e partidas das corridas casuais.\n"
+        "`!ranking` / `!campeonato` — classificação da temporada oficial.\n\n"
+        "**PILOTO E PERFIL**\n"
+        "`!perfil [@membro]` — consulta perfil, atributos, estilo e habilidade.\n"
+        "`!roll-estilo` — roleta de estilos; aceitar um novo substitui o estilo ativo.\n"
+        "`!roll-habilidade` — roleta de habilidades especiais.\n"
+        "`!transferir-giros @membro quantidade` — transfere giros de estilo.\n"
+        "`!loja` / `!colecao-estilos` — loja e consulta do estilo atual.\n"
+        "`!roll-pendente` / `!habilidade-pendente` — recupera resultados pendentes.\n"
+        "`/adicionar_giros`, `/adicionar_giros_habilidade`, `/deletar_giros`, `/setar_estilo` e `/gamepass` — administração.\n\n"
+        "**TEMPORADA E INFORMAÇÕES**\n"
+        "`!iniciartemporada`, `!finalizartemporada`, `!resetcampeonato` — gestão da temporada (administradores).\n"
+        "`!temporada`, `!resultado`, `!estatisticas` — dados da temporada.\n"
+        "`!ajuda` — guia completo de como jogar.\n"
+        "`!sistema` — painel interativo de atributos, pneus, estilos e habilidades."
     )
     await ctx.send(embed=embed)
 
@@ -3103,25 +3255,35 @@ async def commands_list(ctx):
 async def help_f1(ctx):
     embed = discord.Embed(title="📘 Guia de corrida — F1 Discord Racing", color=discord.Color.green())
     embed.description = (
-        "**1) Criar e entrar:** use `!f1`. Pilotos clicam Entrar na corrida, configuram o carro e os pneus, e marcam Estou pronto.\n"
-        "**2) Perfil/crachá:** `!perfil [@membro]` consulta o próprio perfil ou o perfil de outro piloto; os botões de configuração aparecem apenas no próprio perfil.\n**3) Gacha:** `!roll-estilo` permite gastar giros para obter estilos de pilotos. `!transferir-giros @membro quantidade` envia giros de estilo para outro membro. `!roll-habilidade` usa um giro de habilidade liberado pelo administrador após pagamento de 25k sonhos. `!loja` mostra pacotes em sonhos; a compra é confirmada manualmente e o bot não desconta sonhos. `!colecao-estilos` lista os estilos recebidos. Os estilos têm raridades e pontos extras próprios. Nome aparece na corrida; equipe e pneu favorito são visuais, sem impacto na simulação. Perfil salvo é carregado no próximo lobby; os pontos pessoais só podem ser distribuídos uma vez e depois ficam bloqueados.\n"
-        "**4) Classificação:** o host clica Iniciar classificação no painel do lobby. A classificação usa habilidades, pneus, clima e uma variação aleatória moderada para definir o grid.\n"
-        "**5) Corrida:** o host clica Iniciar corrida no painel de classificação. Cada volta é dividida em quatro trechos de reta/curva. Em cada trecho, todos escolhem pelos mesmos botões públicos; a escolha fica oculta até todos confirmarem. O prazo é 45 segundos (ou o valor configurado); quem não decidir recebe Seguro.\n\n"
+        "**1) Escolha o tipo de corrida**\n"
+        "• `!f1`: corrida casual, até **10 pilotos**, não soma pontos no campeonato. Seus resultados entram no `!rankingnormal`.\n"
+        "• `!f1rank`: corrida oficial, até **5 pilotos**, disponível quando existe uma temporada ativa. Os resultados pontuam no `!ranking` e em `!campeonato`.\n"
+        "• É possível manter mais de um lobby ativo ao mesmo tempo, inclusive no mesmo canal. Cada painel controla sua própria corrida. Lobbies que não iniciarem a corrida em 10 minutos são encerrados automaticamente.\n"
+        "• O criador pode cancelar com `!f1cancel`. Administradores podem encerrar o lobby de alguém com `!f1cancel @criador`.\n\n"
+        "**2) Entrar e preparar o carro**\n"
+        "Clique em **Entrar na corrida**, depois em **Configurar carro** para distribuir os 10 pontos entre Gerenciamento de pneus, Curvas, Velocidade, Classificação, Motor e Controle. A tela mostra os nomes e valores; escolha o atributo e depois a quantidade de pontos. Você pode ajustar a distribuição novamente quando quiser. Escolha também os pneus e marque **Estou pronto**.\n\n"
+        "**3) Classificação e largada**\n"
+        "O criador inicia a classificação pelo botão do lobby. O grid é definido por atributos, pneus, clima e variação aleatória. Depois, o criador usa **Iniciar corrida** no painel da classificação.\n\n"
+        "**4) Durante a corrida**\n"
+        "Cada volta possui seis trechos de reta e curva. Em cada trecho, os pilotos escolhem suas ações pelos botões do painel. As escolhas ficam ocultas até todos confirmarem. O prazo padrão é 45 segundos; quem não decidir recebe a opção Seguro.\n\n"
         "**AÇÕES DE PILOTAGEM**\n"
-        "⚖️ **Normal:** ritmo equilibrado, risco padrão e pequena recuperação de energia quando não usa Boost/Overtake. É a opção versátil.\n"
-        "🔥 **Agressivo:** tenta ganhar tempo com ritmo mais rápido e maior potencial de ataque, mas aumenta o risco de erro/derrapagem e o desgaste dos pneus.\n"
-        "🛡️ **Defensivo:** prioriza preservar a posição e reduzir riscos; perde um pouco de ritmo e tem menor força de ataque.\n"
-        "🟢 **Seguro:** ritmo mais conservador, risco reduzido e desgaste menor. Bom para proteger pneus ou evitar erros, mas tende a perder tempo.\n"
-        "↗️ **Overtake Mode:** seleciona uma tentativa de ultrapassagem. Só é elegível se houver um carro imediatamente à frente dentro da janela de 1,0 segundo e energia suficiente (12). Gasta energia; chance depende da diferença, atributos e fatores aleatórios. Não garante ultrapassar. Se estiver fora da janela/sem energia, a tentativa aplica penalidade.\n"
-        "⚡ **Boost Mode:** usa 15 de energia para ganhar ritmo no trecho. Se não houver energia suficiente, não ativa e a simulação aplica uma penalidade leve.\n\n"
-        "**CARRO, PNEUS E CONDIÇÕES**\n"
-        "• Gerenciamento de pneus reduz desgaste; Curvas melhora trechos técnicos; Velocidade favorece retas e ultrapassagens; Classificação melhora o grid; Motor ajuda na aceleração; Controle reduz riscos. Os 10 pontos pessoais ficam bloqueados após a primeira distribuição.\n"
-        "• Soft: rápido, mas desgasta muito. Medium: equilíbrio. Hard: menos aderência, maior durabilidade. Intermediate: indicado para pista úmida. Wet: melhor para chuva forte, mas fraco em pista seca. Pneus inadequados prejudicam o ritmo.\n"
-        "• O desgaste reduz a condição do pneu ao longo dos segmentos. A energia é limitada e pode ser recuperada um pouco com Normal/Seguro. Clima chuvoso aumenta a perda de ritmo e o risco.\n"
-        "• Erros e derrapagens são eventos probabilísticos; Controle, modo escolhido, chuva e desgaste influenciam o risco.\n"
-        "• Habilidades especiais podem ser obtidas com `!roll-habilidade`; cada giro custa 25k sonhos e é liberado pelo administrador após pagamento. Use `!habilidade-pendente` se precisar recuperar um resultado interrompido.\n"
-        "• Campeonato: 1º 10 pts, 2º 7, 3º 5, 4º 3, 5º 1; volta mais rápida vale +1 se o piloto terminar no top 3. Abandono não pontua.\n\n"
-        "**Botões de gestão:** Configurar corrida permite ao host escolher voltas, circuito, clima e prazo de decisão. Iniciar classificação e Iniciar corrida avançam o fluxo sem comandos separados."
+        "⚖️ **Normal:** ritmo equilibrado, risco padrão e pequena recuperação de energia.\n"
+        "🔥 **Agressivo:** mais ritmo e potencial de ataque, mas aumenta risco e desgaste.\n"
+        "🛡️ **Defensivo:** protege posição e reduz riscos, com perda de ritmo.\n"
+        "🟢 **Seguro:** ritmo conservador, menor risco e desgaste.\n"
+        "↗️ **Overtake Mode:** tenta ultrapassar o carro à frente quando está dentro da janela de 1 segundo e há energia suficiente. Não garante a manobra.\n"
+        "⚡ **Boost Mode:** consome 15 de energia para buscar ritmo extra.\n\n"
+        "**5) CARRO, PNEUS E CLIMA**\n"
+        "• Gerenciamento de pneus reduz desgaste; Curvas melhora trechos técnicos; Velocidade favorece retas; Classificação melhora o grid; Motor ajuda na aceleração; Controle reduz riscos.\n"
+        "• Soft é rápido e desgasta mais; Medium equilibra; Hard dura mais; Intermediate é indicado para pista úmida; Wet é indicado para chuva forte. Pneus inadequados provocam perda de ritmo, desgaste e risco adicionais.\n"
+        "• O desgaste reduz a aderência. Energia pode ser recuperada um pouco com Normal e Seguro. Pit stops trocam pneus, reparam parte do dano e acrescentam tempo à parada.\n"
+        "• Erros, derrapagens, acidentes e mudanças de clima são probabilísticos. A transmissão informa ultrapassagens, incidentes e acontecimentos importantes.\n\n"
+        "**6) PONTUAÇÃO E RANKINGS**\n"
+        "• Corridas casuais (`!f1`): ranking separado, com pontos e partidas jogadas. A pontuação é 10, 8, 6, 5, 4, 3, 2 e 1 para as oito primeiras posições. Consulte `!rankingnormal`.\n"
+        "• Corridas oficiais (`!f1rank`): 1º = 10, 2º = 7, 3º = 5, 4º = 3, 5º = 1; +1 pela volta mais rápida se terminar no top 3. Abandono não pontua.\n"
+        "• Use `!ranking`, `!campeonato`, `!temporada`, `!resultado` e `!estatisticas` para consultar a temporada.\n\n"
+        "**7) PERFIL E HABILIDADES**\n"
+        "`!perfil` mostra seu piloto. Ao abrir **Configurar**, os campos vêm preenchidos com os dados atuais; altere somente o que desejar e mantenha os demais valores. Estilos e habilidades são únicos/equipados, não coleções acumuláveis. Use `!roll-estilo` e `!roll-habilidade` para obter novos resultados."
     )
     embed.set_footer(text="As mecânicas são uma simulação simplificada e não reproduzem integralmente as regras oficiais da F1.")
     await ctx.send(embed=embed)
@@ -3202,35 +3364,87 @@ async def profile_command(ctx, membro: Optional[discord.Member] = None):
     await ctx.send(embed=build_profile_embed(profile, target, ctx.guild), view=view)
 
 
-@bot.command(name="f1")
-async def create_race(ctx):
-    if ctx.channel.id in races:
-        return await ctx.send("Já existe um lobby/corrida neste canal. Use `!f1cancel`.")
+async def expire_race_lobby(race):
+    try:
+        await asyncio.sleep(600)
+        if not race_is_active(race) or race.race_started:
+            return
+        races.pop(race.race_id, None)
+        if race.message:
+            await race.message.edit(
+                embed=lobby_embed(
+                    race,
+                    title="⌛ Lobby encerrado por inatividade",
+                    description="A classificação e a corrida não foram iniciadas em até 10 minutos.",
+                ),
+                view=ClosedView(),
+            )
+        await race.channel.send("⌛ O lobby do criador <@" + str(race.host_id) + "> foi encerrado após 10 minutos sem iniciar a corrida.")
+    except asyncio.CancelledError:
+        return
+    except discord.HTTPException:
+        return
+
+
+async def create_race_lobby(ctx, mode):
+    guild_id = ctx.guild.id if ctx.guild else 0
+    if mode == "ranked" and not season_for(guild_id):
+        return await ctx.send("🏆 Não existe temporada ativa. Um administrador precisa usar !iniciartemporada nome antes de criar uma corrida oficial.")
     circuit_name = random.choice(list(CIRCUITS.keys()))
     weather_name = random.choice(list(WEATHER.keys()))
     weather = WEATHER[weather_name]
     race = Race(
         channel=ctx.channel,
         channel_id=ctx.channel.id,
-        guild_id=ctx.guild.id if ctx.guild else 0,
+        guild_id=guild_id,
         host_id=ctx.author.id,
         circuit_name=circuit_name,
         weather_name=weather_name,
         ambient_temp=random.randint(*weather["ambient"]),
         track_temp=random.randint(*weather["track"]),
         surface=weather["surface"],
+        mode=mode,
+        max_players=10 if mode == "casual" else 5,
     )
-    races[ctx.channel.id] = race
+    races[race.race_id] = race
     race.message = await ctx.send(embed=lobby_embed(race), view=LobbyView(race))
+    race.lobby_timeout_task = asyncio.create_task(expire_race_lobby(race))
+
+
+@bot.command(name="f1")
+async def create_race(ctx):
+    await create_race_lobby(ctx, "casual")
+
+
+@bot.command(name="f1rank")
+async def create_ranked_race(ctx):
+    await create_race_lobby(ctx, "ranked")
 
 
 @bot.command(name="f1status")
-async def status_command(ctx):
-    race = race_for_channel(ctx.channel.id)
-    if not race:
-        return await ctx.send("Não há lobby/corrida ativa neste canal.")
+async def status_command(ctx, membro: Optional[discord.Member] = None):
+    active = races_for_channel(ctx.channel.id)
+    if membro:
+        active = [race for race in active if race.host_id == membro.id]
+    if not active:
+        return await ctx.send("Não há lobby/corrida ativa correspondente neste canal.")
+    if len(active) > 1:
+        lines = [
+            f"**{'🏆 Oficial' if race.mode == 'ranked' else '🏁 Casual'}** — criador <@{race.host_id}> • "
+            f"{len(race.drivers)}/{race.max_players} pilotos • "
+            f"{'corrida em andamento' if race.race_started else 'aguardando início'}"
+            for race in active
+        ]
+        return await ctx.send(embed=discord.Embed(
+            title="📋 Lobbies ativos neste canal",
+            description="\n".join(lines) + "\n\nUse !f1status @criador para atualizar um painel específico.",
+            color=discord.Color.blurple(),
+        ))
+    race = active[0]
     if race.race_started:
         embed = standings_embed(race, race.current_lap, f"segmento {race.current_segment}", [])
+    elif race.qualifying_done:
+        embed = qualifying_embed(race)
     else:
         embed = lobby_embed(race)
     if race.message:
@@ -3243,22 +3457,50 @@ async def status_command(ctx):
         await ctx.send(embed=embed)
 
 
-@bot.command(name="f1cancel")
-async def cancel_command(ctx):
-    race = race_for_channel(ctx.channel.id)
-    if not race:
-        return await ctx.send("Não há lobby/corrida ativa neste canal.")
-    if ctx.author.id != race.host_id:
-        return await ctx.send("Somente o host pode cancelar.")
+async def cancel_race_instance(race, reason):
+    if race.lobby_timeout_task and not race.lobby_timeout_task.done():
+        race.lobby_timeout_task.cancel()
     if race.race_task and not race.race_task.done():
         race.race_task.cancel()
-    races.pop(ctx.channel.id, None)
+    races.pop(race.race_id, None)
     if race.message:
         try:
-            await race.message.edit(embed=lobby_embed(race, title="🛑 Corrida cancelada"), view=ClosedView())
+            await race.message.edit(
+                embed=lobby_embed(race, title="🛑 Corrida cancelada", description=reason),
+                view=ClosedView(),
+            )
         except discord.HTTPException:
             pass
-    await ctx.send("🛑 Corrida cancelada pelo host.")
+
+
+@bot.command(name="f1cancel")
+async def cancel_command(ctx, membro: Optional[discord.Member] = None):
+    is_admin = bool(ctx.guild and ctx.author.guild_permissions.administrator)
+    if membro:
+        if not is_admin:
+            return await ctx.send("Somente administradores podem cancelar a corrida de outro criador.")
+        race = next(
+            (
+                active_race for active_race in reversed(list(races.values()))
+                if active_race.guild_id == ctx.guild.id and active_race.host_id == membro.id
+            ),
+            None,
+        )
+        if not race:
+            return await ctx.send(f"Não encontrei uma corrida ativa criada por {membro.mention} neste servidor.")
+        await cancel_race_instance(race, f"Cancelada por um administrador a pedido da equipe. Criador: {membro.mention}.")
+        return await ctx.send(f"🛑 Corrida criada por {membro.mention} cancelada pelo administrador.")
+    race = race_for_channel(ctx.channel.id, host_id=ctx.author.id)
+    if not race and is_admin:
+        active = races_for_channel(ctx.channel.id)
+        if len(active) == 1:
+            race = active[0]
+        elif len(active) > 1:
+            return await ctx.send("Há vários lobbies ativos. Para escolher um, use !f1cancel @criador.")
+    if not race:
+        return await ctx.send("Não encontrei uma corrida sua neste canal. Administradores podem usar !f1cancel @criador.")
+    await cancel_race_instance(race, f"Cancelada pelo criador <@{ctx.author.id}>.")
+    await ctx.send("🛑 Sua corrida foi cancelada.")
 
 
 _persistent_gacha_views_registered = False
