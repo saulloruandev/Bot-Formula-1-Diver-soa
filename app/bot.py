@@ -3477,9 +3477,15 @@ async def cancel_command(ctx, membro: Optional[discord.Member] = None):
     if membro:
         if not is_admin:
             return await ctx.send("Somente administradores podem cancelar a corrida de outro criador.")
-        race = race_for_channel(ctx.channel.id, host_id=membro.id)
+        race = next(
+            (
+                active_race for active_race in reversed(list(races.values()))
+                if active_race.guild_id == ctx.guild.id and active_race.host_id == membro.id
+            ),
+            None,
+        )
         if not race:
-            return await ctx.send(f"Não encontrei uma corrida ativa criada por {membro.mention} neste canal.")
+            return await ctx.send(f"Não encontrei uma corrida ativa criada por {membro.mention} neste servidor.")
         await cancel_race_instance(race, f"Cancelada por um administrador a pedido da equipe. Criador: {membro.mention}.")
         return await ctx.send(f"🛑 Corrida criada por {membro.mention} cancelada pelo administrador.")
     race = race_for_channel(ctx.channel.id, host_id=ctx.author.id)
