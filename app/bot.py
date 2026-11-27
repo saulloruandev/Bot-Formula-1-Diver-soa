@@ -2464,9 +2464,12 @@ async def run_race(race):
                     )
                     lap_events.append(overtake_event)
                     await publish_important_event(race, overtake_event)
-            incident = any("acidente" in event.lower() or "abandono" in event.lower() for event in lap_events)
+            # Safety Car é reservado a incidentes realmente graves; derrapagens e
+            # acidentes moderados não neutralizam a prova.
+            severe_incident = any("acidente grave" in event.lower() or "abandono" in event.lower() for event in lap_events)
             still_running = [d for d in race.drivers.values() if not d.retired]
-            if incident and len(still_running) > 1 and race.safety_car_laps == 0 and random.random() < 0.55:
+            sc_chance = 0.32 if race.total_laps >= 10 else 0.20 if race.total_laps <= 5 else 0.26
+            if severe_incident and len(still_running) > 1 and race.safety_car_laps == 0 and random.random() < sc_chance:
                 race.safety_car_laps = 1
                 safety_car_triggered_this_lap = True
                 resume_segment_index = segment_index
@@ -2806,14 +2809,15 @@ class RollConfirmView(discord.ui.View):
         style_url = style_image_url(self.style_data["name"])
         if style_url:
             result_embed.set_image(url=style_url)
-        await interaction.response.edit_message(content=msg, embed=result_embed, view=GachaRollView(self.owner_id))
+        roll_tag = interaction.message.content or f"Roll de estilo • <@{self.owner_id}>"
+        await interaction.response.edit_message(content=roll_tag + "\n" + msg, embed=result_embed, view=GachaRollView(self.owner_id))
         # A carta sorteada não é apagada: o novo painel é enviado abaixo dela.
         panel_embed = discord.Embed(title="🎰 Gacha de estilos da F1", description=(
             f"**Giros disponíveis: {profile['spins']}**\nAo aceitar, o novo estilo substitui o atual.\n\n" +
             "\n".join(f"{RARITY_DATA[r]['emoji']} **{r}** — {RARITY_DATA[r]['chance']}% • {RARITY_DATA[r]['points']} pontos" for r in RARITY_DATA)
         ), color=discord.Color.purple())
         try:
-            await interaction.channel.send(embed=panel_embed, view=GachaRollView(self.owner_id))
+            await interaction.channel.send(content=roll_tag, embed=panel_embed, view=GachaRollView(self.owner_id))
         except discord.HTTPException:
             pass
     @discord.ui.button(label="Aceitar",emoji="✅",style=discord.ButtonStyle.success)
@@ -2847,7 +2851,7 @@ async def roll_style_command(ctx):
         role, warning = await sync_pilot_role(ctx.guild, ctx.author, starter_style["name"])
         if warning:
             embed.add_field(name="Aviso de cargo", value=warning, inline=False)
-    await ctx.send(embed=embed, view=GachaRollView(ctx.author.id))
+    await ctx.send(content=f"🎟️ **Roll de estilo #{ctx.message.id}** • solicitado por {ctx.author.mention}", embed=embed, view=GachaRollView(ctx.author.id))
 
 @bot.command(name="transferir-giros")
 async def transfer_style_spins(ctx, jogador: discord.Member, quantidade: int):
@@ -2921,7 +2925,8 @@ class AbilityRollConfirmView(discord.ui.View):
         profile.pop("pending_ability_roll", None)
         save_profiles()
         embed = discord.Embed(title="✨ Resultado do giro de habilidade", description=f"**{self.ability_name}**\n{ABILITY_CATALOG[self.ability_name]}", color=discord.Color.gold())
-        await interaction.response.edit_message(content=message, embed=embed, view=None)
+        roll_tag = interaction.message.content or f"Roll de habilidade • <@{self.owner_id}>"
+        await interaction.response.edit_message(content=roll_tag + "\n" + message, embed=embed, view=None)
 
     @discord.ui.button(label="Equipar habilidade", emoji="✅", style=discord.ButtonStyle.success)
     async def accept(self, interaction, button):
@@ -2953,11 +2958,11 @@ class AbilityRollView(discord.ui.View):
         profile["ability_spins"] -= 1
         profile["pending_ability_roll"] = ability_name
         save_profiles()
-        await interaction.response.edit_message(embed=discord.Embed(title="✨ GIRANDO HABILIDADE...", description="A roleta está sorteando sua habilidade especial...", color=discord.Color.dark_grey()), view=None)
+        await interaction.response.edit_message(content=interaction.message.content, embed=discord.Embed(title="✨ GIRANDO HABILIDADE...", description="A roleta está sorteando sua habilidade especial...", color=discord.Color.dark_grey()), view=None)
         await asyncio.sleep(2)
         result = discord.Embed(title=f"✨ HABILIDADE SORTEADA: {ability_name}", description=f"{ABILITY_CATALOG[ability_name]}\n\nDeseja equipar esta habilidade?", color=discord.Color.gold())
         try:
-            await interaction.message.edit(embed=result, view=AbilityRollConfirmView(self.owner_id, ability_name))
+            await interaction.message.edit(content=interaction.message.content, embed=result, view=AbilityRollConfirmView(self.owner_id, ability_name))
         except discord.HTTPException:
             pass
 
@@ -2966,7 +2971,7 @@ class AbilityRollView(discord.ui.View):
 async def roll_ability_command(ctx):
     profile = gacha_profile(ctx.author.id)
     embed = discord.Embed(title="✨ Roleta de habilidades especiais", description=f"**Giros disponíveis:** {profile.get('ability_spins', 0)}\n**Custo:** 25.000 sonhos por giro\n\nClique para sortear uma habilidade. Você poderá equipar ou recusar o resultado.", color=discord.Color.gold())
-    await ctx.send(embed=embed, view=AbilityRollView(ctx.author.id))
+    await ctx.send(content=f"🎟️ **Roll de habilidade #{ctx.message.id}** • solicitado por {ctx.author.mention}", embed=embed, view=AbilityRollView(ctx.author.id))
 
 
 @bot.command(name="habilidade-pendente")
@@ -3313,9 +3318,13 @@ async def register_championship_result(race, order, fastest):
             "lap_time": driver.best_lap_time,
             "lap_number": driver.best_lap_number,
         })
+    # Provas curtas valem menos pontos para evitar farm de etapas rápidas.
+    points_multiplier = 0.50 if race.total_laps <= 3 else 0.75 if race.total_laps <= 5 else 1.0
     season.setdefault("races", []).append({
         "race_id": race_id, "circuit": race.circuit_name,
         "date": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+        "total_laps": race.total_laps,
+        "points_multiplier": points_multiplier,
         "results": results,
     })
     save_championship()
@@ -3330,12 +3339,13 @@ def championship_table(season):
             row["races"] += 1
             pos = result["position"]
             if not result.get("retired"):
-                row["points"] += CHAMPIONSHIP_POINTS.get(pos, 0)
+                multiplier = float(race_data.get("points_multiplier", 1.0))
+                row["points"] += round(CHAMPIONSHIP_POINTS.get(pos, 0) * multiplier, 2)
                 row["wins"] += pos == 1
                 row["seconds"] += pos == 2
                 row["thirds"] += pos == 3
                 if result.get("fastest_lap") and pos <= 3:
-                    row["points"] += 1
+                    row["points"] += round(1 * float(race_data.get("points_multiplier", 1.0)), 2)
                     row["fastest"] += 1
     return sorted(table.values(), key=lambda x: (x["points"], x["wins"], x["seconds"], x["thirds"], x["fastest"]), reverse=True)
 
@@ -3569,13 +3579,13 @@ async def help_f1(ctx):
         "• Gerenciamento de pneus reduz desgaste; Curvas melhora trechos técnicos; Velocidade favorece retas e ultrapassagens; Classificação melhora o grid; Motor ajuda na aceleração; Controle melhora disputas e reduz erros. Os pontos e bônus do estilo agora têm efeito mais perceptível.\n"
         "• Soft é rápido e desgasta mais; Medium equilibra; Hard dura mais; Intermediate é indicado para pista úmida; Wet é indicado para chuva forte. Pneus inadequados provocam perda de ritmo, desgaste e risco adicionais.\n"
         "• Cada piloto tem 2 jogos de pneus no total: o jogo inicial e uma troca durante a corrida. O botão Pit Stop abre um menu separado para escolher o composto, evitando cliques acidentais.\n"
-        "• Quando há Safety Car, a corrida pula o restante da volta do incidente e retoma na volta seguinte no mesmo trecho (ex.: 1ª volta, trecho 2/6 → 2ª volta, trecho 2/6). Nesse trecho há uma única decisão sob Safety Car; o pelotão é agrupado uma vez e o pit stop tem perda reduzida.\n"
+        "• Safety Car é raro e reservado a acidentes graves ou abandonos. Acidentes leves/moderados não provocam neutralização; em provas de até 5 voltas a chance é ainda menor. Quando acionado, pula o restante da volta e retoma no mesmo trecho da seguinte.\n"
         "• O desgaste reduz a aderência. Energia pode ser recuperada um pouco com Normal e Seguro. Pit stops reparam parte do dano e acrescentam tempo à parada.\n"
         "• Erros, derrapagens, acidentes e mudanças de clima são probabilísticos. A transmissão informa ultrapassagens, incidentes e acontecimentos importantes.\n\n"
         "**6) PONTUAÇÃO E RANKINGS**\n"
         "• Corridas casuais (`!f1`): ranking separado, com pontos e partidas jogadas. A pontuação é 10, 8, 6, 5, 4, 3, 2 e 1 para as oito primeiras posições. Consulte `!rankingnormal`.\n"
         "• Corridas com menos de 3 jogadores humanos ou com bots em maioria não pontuam nos rankings. Bots nunca recebem pontos.\n"
-        "• Corridas oficiais (`!f1rank`): 1º = 10, 2º = 7, 3º = 5, 4º = 3, 5º = 1; +1 pela volta mais rápida se terminar no top 3. Abandono não pontua.\n"
+        "• Corridas oficiais (`!f1rank`): 1º = 10, 2º = 7, 3º = 5, 4º = 3, 5º = 1; +1 pela volta mais rápida se terminar no top 3. Provas de até 3 voltas valem 50% dos pontos; de 5 voltas, 75%; de 10 ou mais, 100%. Abandono não pontua.\n"
         "• Use `!ranking`, `!campeonato`, `!temporada`, `!resultado` e `!estatisticas` para consultar a temporada.\n\n"
         "**7) PERFIL E HABILIDADES**\n"
         "`!perfil` mostra seu piloto. Ao abrir **Configurar**, os campos vêm preenchidos com os dados atuais; altere somente o que desejar e mantenha os demais valores. Estilos e habilidades são únicos/equipados, não coleções acumuláveis. Use `!roll-estilo` e `!roll-habilidade` para obter novos resultados."
