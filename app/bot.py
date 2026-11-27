@@ -1819,7 +1819,7 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
         driver.car_damage = max(0.0, driver.car_damage - 12.0)
         repair_penalty = 0.0
         repaired = 0.0
-        if action.get("pit_repair"):
+        if action.get("pit_repair") and driver.car_damage > 0:
             repaired = min(30.0, driver.car_damage)
             driver.car_damage = max(0.0, driver.car_damage - 30.0)
             repair_penalty = 4.0
@@ -3378,6 +3378,8 @@ async def diagnosticar_cargos_estilo(interaction: discord.Interaction):
         description += "\n\n**IDs que não correspondem a cargos:**\n" + "\n".join(missing[:20])
     if above_bot:
         description += "\n\n**Cargos que o bot não consegue gerenciar:**\n" + "\n".join(above_bot[:20])
+    if found_lines:
+        description += "\n\n**Mapeamento encontrado (estilo → cargo real):**\n" + "\n".join(found_lines)
     if not missing and not above_bot and bot_member and bot_member.guild_permissions.manage_roles:
         description += "\n\nTodos os IDs foram encontrados e estão abaixo do cargo do bot. Se alguém ainda não recebe o cargo, use /sincronizar_estilo para corrigir o membro."
     embed = discord.Embed(title="🔎 Diagnóstico dos cargos de estilo", description=description[:4000], color=discord.Color.blurple())
