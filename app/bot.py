@@ -1264,8 +1264,8 @@ def lobby_embed(race: Race, title=None, description=None):
             )
             # O conteúdo individual é limitado preventivamente, mesmo se o
             # jogador usar um nome de perfil muito comprido.
-            if len(driver_line) > 1000:
-                driver_line = driver_line[:997] + "..."
+            if len(driver_line) > 450:
+                driver_line = driver_line[:447] + "..."
             embed.add_field(
                 name=f"🏎️ P{pos} — {driver_display_name(driver)[:220]}",
                 value=driver_line or "Piloto inscrito.",
@@ -1600,7 +1600,7 @@ def calculate_qualifying_time(driver, race):
     tire_delta = (tire_weather_multiplier(driver.tire, rain) - 1.0) * 2.8
     weather_penalty = rain * 1.8
     if driver.ability == "Motorista de Qualificação":
-        skill_delta += 0.20
+        skill_delta += 0.32
     random_delta = random.uniform(-0.22, 0.22)
     return max(60.0, circuit["base_lap"] - skill_delta * 0.65 + tire_delta + weather_penalty + random_delta)
 
@@ -1757,9 +1757,9 @@ def segment_base_time(segment, circuit):
 def skill_segment_bonus(driver, segment):
     if segment == "reta":
         # Reta e aceleração predominam; reta impacta a velocidade média.
-        return driver.effective_skill("straights") * 0.055 + driver.effective_skill("acceleration") * 0.035
+        return driver.effective_skill("straights") * 0.095 + driver.effective_skill("acceleration") * 0.065
     # Curva, frenagem e controle fazem diferença na zona técnica.
-    return driver.effective_skill("curves") * 0.065 + driver.effective_skill("control") * 0.045
+    return driver.effective_skill("curves") * 0.105 + driver.effective_skill("control") * 0.075
 
 
 def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opponent=None):
@@ -1816,22 +1816,22 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
         driver.tire_warning_lap = race.current_lap
         event = (event + " " if event else "") + f"⚠️ {driver_display_name(driver)} está com pneus inadequados para a pista ({TIRES[driver.tire]['label']})."
     if driver.ability == "Rei da Chuva":
-        weather_loss *= 0.90
+        weather_loss *= 0.82
     mode_adjustment = mode["pace"]
     line_risk = 0.0
     if segment == "curva":
         line = action.get("line")
         if line == "inside":
-            mode_adjustment -= 0.035
-            line_risk += 0.012
+            mode_adjustment -= 0.055
+            line_risk += 0.020
         elif line == "outside":
-            mode_adjustment -= 0.018
+            mode_adjustment -= 0.030
         elif line == "defend":
-            mode_adjustment += 0.012
-            line_risk -= 0.012
+            mode_adjustment += 0.005
+            line_risk -= 0.018
         elif line == "safe":
-            mode_adjustment += 0.025
-            line_risk -= 0.020
+            mode_adjustment += 0.035
+            line_risk -= 0.035
 
     # Energia de jogo substitui um uso simplificado da gestão elétrica:
     # Boost consome energia e dá bônus, Overtake Mode consome energia quando elegível.
@@ -1866,18 +1866,18 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     time = base - skill_bonus - (tire_condition * 0.12) + tire_loss + weather_loss + mismatch_loss + mode_adjustment + energy_adjustment + random_error + base * damage_penalty + pit_penalty
 
     curve_intensity = 1.0 if segment == "curva" else 0.35
-    risk = 0.025 + mode["risk"] + line_risk + rain * (0.12 if segment == "curva" else 0.06)
+    risk = 0.010 + mode["risk"] + line_risk + rain * (0.075 if segment == "curva" else 0.035)
     if wrong_tire:
         risk += 0.055 if rain > 0.65 else 0.025
-    risk += (driver.tire_wear / 100) * 0.20 + (driver.car_damage / 100) * 0.12
-    risk += curve_intensity * max(0, 5 - driver.effective_skill("curves")) * 0.012
-    risk += curve_intensity * max(0, 5 - driver.effective_skill("control")) * 0.014
+    risk += (driver.tire_wear / 100) * 0.11 + (driver.car_damage / 100) * 0.085
+    risk += curve_intensity * max(0, 5 - driver.effective_skill("curves")) * 0.008
+    risk += curve_intensity * max(0, 5 - driver.effective_skill("control")) * 0.009
     if driver.ability == "Mãos de Cirurgião":
-        risk -= 0.008
+        risk -= 0.015
     if driver.ability == "Sangue Frio" and action["mode"] == "aggressive":
-        risk -= 0.006
+        risk -= 0.012
     risk += max(0, -mode["pace"]) * 0.30  # agressividade/ação rápida
-    risk = max(0.008, min(0.52, risk))
+    risk = max(0.004, min(0.30, risk))
 
     if random.random() < risk:
         severity = random.random()
@@ -1903,7 +1903,7 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     wear_increment = TIRES[driver.tire]["wear"] * (0.75 if segment == "reta" else 1.15)
     wear_increment *= max(0.75, 1.0 - driver.effective_skill("tyre_management") * 0.025)
     if driver.ability == "Mestre dos Pneus":
-        wear_increment *= 0.90
+        wear_increment *= 0.82
     if driver.ability == "Pit Stop Perfeito" and race.current_lap == 1 and segment == "reta":
         wear_increment *= 0.85
     if action["mode"] == "aggressive":
@@ -2037,14 +2037,26 @@ class AddBotsModal(discord.ui.Modal, title="Adicionar pilotos controlados pelo b
         try: amount = int(self.amount.value)
         except ValueError: return await interaction.response.send_message("Informe um número inteiro.", ephemeral=True)
         if amount < 1: return await interaction.response.send_message("Informe pelo menos 1 bot.", ephemeral=True)
-        amount = min(amount, self.race.max_players - len(self.race.drivers))
-        if amount <= 0: return await interaction.response.send_message("O lobby já está cheio.", ephemeral=True)
-        added = []
-        for _ in range(amount):
-            self.race.bot_counter += 1; bot_id = -self.race.bot_counter
-            driver = create_bot_driver(self.race, bot_id); self.race.drivers[bot_id] = driver; added.append(driver.race_name)
-        await interaction.response.send_message(f"🤖 Adicionei {len(added)} piloto(s): {', '.join(added)}. Eles já entram configurados e prontos.", ephemeral=True)
-        await refresh_lobby(self.race, LobbyView(self.race))
+        async with self.race.lock:
+            if not race_is_active(self.race) or self.race.started:
+                return await interaction.response.send_message("O lobby não aceita mais alterações.", ephemeral=True)
+            amount = min(amount, self.race.max_players - len(self.race.drivers))
+            if amount <= 0:
+                return await interaction.response.send_message("O lobby já está cheio.", ephemeral=True)
+            added = []
+            for _ in range(amount):
+                self.race.bot_counter += 1
+                bot_id = -self.race.bot_counter
+                driver = create_bot_driver(self.race, bot_id)
+                self.race.drivers[bot_id] = driver
+                added.append(driver.race_name)
+            # Atualiza a mensagem pública antes de confirmar ao host: se o Discord
+            # rejeitar a edição, o callback não informa que a lista foi atualizada.
+            await refresh_lobby(self.race, LobbyView(self.race))
+        await interaction.response.send_message(
+            f"🤖 Adicionei {len(added)} piloto(s): {', '.join(added)}. Eles já entram configurados e prontos.",
+            ephemeral=True,
+        )
 
 BOT_PILOT_NAMES = ["Charles Leclerc", "Lewis Hamilton", "Max Verstappen", "Lando Norris", "Oscar Piastri", "Fernando Alonso", "Carlos Sainz", "George Russell", "Kimi Antonelli", "Pierre Gasly", "Esteban Ocon", "Alex Albon", "Nico Hülkenberg", "Yuki Tsunoda", "Oliver Bearman", "Ayrton Senna", "Michael Schumacher", "Sebastian Vettel", "Daniel Ricciardo", "Valtteri Bottas"]
 
@@ -2350,6 +2362,7 @@ async def run_race(race):
         driver.distance = float(rank)
     circuit = CIRCUITS[race.circuit_name]
     segments = circuit.get("segments") or ["reta", "curva"]
+    resume_segment_index = 1
     for lap in range(1, race.total_laps + 1):
         if race.early_finish:
             break
@@ -2366,7 +2379,9 @@ async def run_race(race):
             weather_event = f"🌦️ Mudança de clima: {previous_weather} -> {race.weather_name}. Pista {race.surface.lower()}."
             lap_events.append(weather_event)
             await publish_important_event(race, weather_event)
-        for segment_index, segment in enumerate(segments, 1):
+        safety_car_triggered_this_lap = False
+        for segment_index in range(resume_segment_index, len(segments) + 1):
+            segment = segments[segment_index - 1]
             race.current_segment = segment_index
             race.current_segment_type = segment
             active = [d for d in race.drivers.values() if not d.finished and not d.retired]
@@ -2414,12 +2429,12 @@ async def run_race(race):
                 target = pre_order[index - 1]
                 prior_gap = gaps.get(driver.user.id)
                 if action.get("attack") and prior_gap is not None and prior_gap <= OVERTAKE_DETECTION_SECONDS:
-                    chance = 0.22 + driver.effective_skill("straights") * 0.025 + driver.effective_skill("acceleration") * 0.018 + driver.effective_skill("control") * 0.008
+                    chance = 0.18 + driver.effective_skill("straights") * 0.035 + driver.effective_skill("acceleration") * 0.025 + driver.effective_skill("control") * 0.015
                     if driver.ability in ("Ultrapassador Nato", "Especialista em DRS"):
-                        chance += 0.035
-                    chance -= target.control * 0.012
+                        chance += 0.065
+                    chance -= target.effective_skill("control") * 0.018
                     if target.ability == "Defensor Nato":
-                        chance -= 0.035
+                        chance -= 0.060
                     chance = max(0.08, min(0.68, chance))
                     gap_after_segment = driver.total_time - target.total_time
                     if random.random() < chance and 0 < gap_after_segment <= 0.65:
@@ -2452,8 +2467,10 @@ async def run_race(race):
             incident = any("acidente" in event.lower() or "abandono" in event.lower() for event in lap_events)
             still_running = [d for d in race.drivers.values() if not d.retired]
             if incident and len(still_running) > 1 and race.safety_car_laps == 0 and random.random() < 0.55:
-                race.safety_car_laps = 2
-                safety_event = "🚨 SAFETY CAR NA PISTA! Neutralização até o fim desta volta e por mais uma volta completa para limpeza da pista. Pit stops têm perda reduzida."
+                race.safety_car_laps = 1
+                safety_car_triggered_this_lap = True
+                resume_segment_index = segment_index
+                safety_event = f"🚨 SAFETY CAR! O pelotão avançará para a volta {lap + 1}, trecho {segment_index}/{len(segments)}. A próxima decisão será sob Safety Car, com pit stop de perda reduzida."
                 lap_events.append(safety_event)
                 await publish_important_event(race, safety_event)
             if race.safety_car_laps > 0 and len(still_running) > 1:
@@ -2467,6 +2484,12 @@ async def run_race(race):
                 await race.message.edit(embed=panel_embed, view=ClosedView())
             await flush_race_broadcasts(race)
             lap_events.clear()
+            if safety_car_triggered_this_lap:
+                # Pula o restante da volta atual e retoma no mesmo setor na próxima volta.
+                break
+            if race.safety_car_laps > 0:
+                race.safety_car_laps = 0
+                resume_segment_index = 1
             still_active = [d for d in race.drivers.values() if not d.finished and not d.retired]
             if len(still_active) == 1:
                 still_active[0].finished = True
@@ -2480,15 +2503,18 @@ async def run_race(race):
                     await race.message.edit(embed=panel_embed, view=ClosedView())
                 await flush_race_broadcasts(race)
                 break
-        for driver in race.drivers.values():
-            if not driver.finished and not driver.retired:
-                driver.last_lap_time = driver.total_time - lap_start_times.get(driver.user.id, driver.total_time)
-                minimum_valid_lap = circuit["base_lap"] * 0.55
-                if minimum_valid_lap <= driver.last_lap_time < (driver.best_lap_time or float("inf")):
-                    driver.best_lap_time = driver.last_lap_time
-                    driver.best_lap_number = lap
-        if race.safety_car_laps > 0:
-            race.safety_car_laps -= 1
+        # A volta interrompida pelo Safety Car não conta como volta rápida.
+        if not safety_car_triggered_this_lap:
+            for driver in race.drivers.values():
+                if not driver.finished and not driver.retired:
+                    driver.last_lap_time = driver.total_time - lap_start_times.get(driver.user.id, driver.total_time)
+                    minimum_valid_lap = circuit["base_lap"] * 0.55
+                    if minimum_valid_lap <= driver.last_lap_time < (driver.best_lap_time or float("inf")):
+                        driver.best_lap_time = driver.last_lap_time
+                        driver.best_lap_number = lap
+        if race.safety_car_laps > 0 and not safety_car_triggered_this_lap:
+            race.safety_car_laps = 0
+            resume_segment_index = 1
         await asyncio.sleep(0.5)
     final_order = current_order(race)
     for driver in final_order:
@@ -3531,15 +3557,19 @@ async def help_f1(ctx):
         "**AÇÕES DE PILOTAGEM**\n"
         "⚖️ **Normal:** ritmo equilibrado, risco padrão e pequena recuperação de energia.\n"
         "🔥 **Agressivo:** mais ritmo e potencial de ataque, mas aumenta risco e desgaste.\n"
+        "🌀 **Por dentro:** tenta a linha mais curta na curva; ganha mais tempo, mas assume risco maior de contato.\n"
+        "🔵 **Por fora:** contorna a curva por uma linha mais longa; ganha menos tempo que por dentro, com risco menor.\n"
+        "🛡️ **Defender a linha:** prioriza proteger a posição e dificultar a ultrapassagem, sacrificando um pouco de ritmo.\n"
+        "🟢 **Traçado seguro:** escolhe a opção mais conservadora, com perda de tempo maior, mas menor chance de erro.\n"
         "🛡️ **Defensivo:** protege posição e reduz riscos, com perda de ritmo.\n"
         "🟢 **Seguro:** ritmo conservador, menor risco e desgaste.\n"
         "↗️ **Overtake Mode:** tenta ultrapassar o carro à frente quando está dentro da janela de 1 segundo e há energia suficiente. Não garante a manobra.\n"
         "⚡ **Boost Mode:** consome 15 de energia para buscar ritmo extra.\n\n"
         "**5) CARRO, PNEUS E CLIMA**\n"
-        "• Gerenciamento de pneus reduz desgaste; Curvas melhora trechos técnicos; Velocidade favorece retas; Classificação melhora o grid; Motor ajuda na aceleração; Controle reduz riscos.\n"
+        "• Gerenciamento de pneus reduz desgaste; Curvas melhora trechos técnicos; Velocidade favorece retas e ultrapassagens; Classificação melhora o grid; Motor ajuda na aceleração; Controle melhora disputas e reduz erros. Os pontos e bônus do estilo agora têm efeito mais perceptível.\n"
         "• Soft é rápido e desgasta mais; Medium equilibra; Hard dura mais; Intermediate é indicado para pista úmida; Wet é indicado para chuva forte. Pneus inadequados provocam perda de ritmo, desgaste e risco adicionais.\n"
         "• Cada piloto tem 2 jogos de pneus no total: o jogo inicial e uma troca durante a corrida. O botão Pit Stop abre um menu separado para escolher o composto, evitando cliques acidentais.\n"
-        "• Durante o Safety Car, a troca de pneus também fica disponível em curvas e a perda de tempo da parada é menor. A neutralização dura o restante da volta do incidente e mais uma volta completa para limpeza da pista.\n"
+        "• Quando há Safety Car, a corrida pula o restante da volta do incidente e retoma na volta seguinte no mesmo trecho (ex.: 1ª volta, trecho 2/6 → 2ª volta, trecho 2/6). Nesse trecho há uma única decisão sob Safety Car; o pelotão é agrupado uma vez e o pit stop tem perda reduzida.\n"
         "• O desgaste reduz a aderência. Energia pode ser recuperada um pouco com Normal e Seguro. Pit stops reparam parte do dano e acrescentam tempo à parada.\n"
         "• Erros, derrapagens, acidentes e mudanças de clima são probabilísticos. A transmissão informa ultrapassagens, incidentes e acontecimentos importantes.\n\n"
         "**6) PONTUAÇÃO E RANKINGS**\n"
