@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="420" viewBox="0 0 800 420">
+<defs><linearGradient id="bg" x2="0" y2="1"><stop stop-color="#101b2b"/><stop offset="1" stop-color="#17283b"/></linearGradient></defs>
+<rect width="800" height="420" rx="24" fill="url(#bg)"/>
+<text x="38" y="48" fill="#f4f7fb" font-family="Arial,sans-serif" font-size="25" font-weight="700">SUZUKA</text>
+<text x="760" y="46" text-anchor="end" fill="#8fa7bd" font-family="Arial,sans-serif" font-size="12">SCHEMATIC CIRCUIT PREVIEW</text>
+<path d="M120 160 C170 70 300 75 350 150 C400 230 520 235 590 160 C670 75 720 170 650 245 C590 315 470 300 400 240 C320 170 230 220 170 320 L110 280 Z" fill="none" stroke="#05090f" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M120 160 C170 70 300 75 350 150 C400 230 520 235 590 160 C670 75 720 170 650 245 C590 315 470 300 400 240 C320 170 230 220 170 320 L110 280 Z" fill="none" stroke="#24c5ee" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M95 375 H705" stroke="#2d4257" stroke-width="1"/>
+<circle cx="150" cy="310" r="8" fill="#f20bd8"/><text x="168" y="315" fill="#e7edf5" font-family="Arial" font-size="13">START / FINISH</text>
+<circle cx="330" cy="95" r="7" fill="#13c94a"/><text x="345" y="91" fill="#13c94a" font-family="Arial" font-size="12">DRS</text>
+<text x="38" y="395" fill="#8fa7bd" font-family="Arial" font-size="12">Mapa ilustrativo para orientação no lobby • não representa escala oficial</text>
+</svg>
