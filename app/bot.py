@@ -2253,12 +2253,14 @@ async def run_race(race):
     fastest = min((d for d in final_order if d.best_lap_time is not None and not d.retired), key=lambda d: d.best_lap_time, default=None)
     if fastest:
         await publish_important_event(race, f"⏱️ Volta mais rápida: {driver_display_name(fastest)} — {format_time(fastest.best_lap_time)}")
-    await register_championship_result(race, final_order, fastest)
+    if race.mode == "ranked":
+        await register_championship_result(race, final_order, fastest)
+    else:
+        register_normal_result(race, final_order)
     podium = "\n".join(
-        f"**P{position} — {driver_display_name(driver)}** | Tempo: `{format_time(driver.total_time)}` | "
-        f"{TIRES[driver.tire]['label']} • {driver.pit_stops} pit stop(s) • desgaste {driver.tire_wear:.0f}%"
-        + (" • ⛔ Abandonou" if driver.retired else "")
-        for position, driver in enumerate(final_order, 1)
+        f"**{driver_display_name(driver)}** — `{format_time(driver.total_time)}`"
+        + (" • Abandonou" if driver.retired else "")
+        for driver in final_order
     )
     title = "🏁 VITÓRIA ANTECIPADA" if race.early_finish else "🏆 FIM DE CORRIDA — RESULTADO FINAL"
     embed = discord.Embed(title=title, description=podium or "Corrida encerrada sem pilotos classificados.", color=discord.Color.gold())
@@ -2911,6 +2913,66 @@ def load_championship():
 
 CHAMPIONSHIP = load_championship()
 
+NORMAL_RANKING_FILE = Path(__file__).with_name("ranking_normal.json")
+NORMAL_RANKING_POINTS = {1: 10, 2: 8, 3: 6, 4: 5, 5: 4, 6: 3, 7: 2, 8: 1}
+
+def load_normal_ranking():
+    try:
+        if NORMAL_RANKING_FILE.exists():
+            data = json.loads(NORMAL_RANKING_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data.setdefault("players", {})
+                data.setdefault("races", [])
+                return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {"players": {}, "races": []}
+
+NORMAL_RANKING = load_normal_ranking()
+
+def save_normal_ranking():
+    NORMAL_RANKING_FILE.write_text(
+        json.dumps(NORMAL_RANKING, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+def normal_ranking_table(guild_id):
+    rows = [
+        row for row in NORMAL_RANKING.get("players", {}).values()
+        if str(row.get("guild_id")) == str(guild_id)
+    ]
+    return sorted(
+        rows,
+        key=lambda row: (row.get("points", 0), row.get("wins", 0), row.get("podiums", 0), row.get("races", 0)),
+        reverse=True,
+    )
+
+def register_normal_result(race, order):
+    if race.mode != "casual" or race.race_id in NORMAL_RANKING.get("races", []):
+        return
+    players = NORMAL_RANKING.setdefault("players", {})
+    for position, driver in enumerate(order, 1):
+        key = f"{race.guild_id}:{driver.user.id}"
+        row = players.setdefault(key, {
+            "guild_id": str(race.guild_id),
+            "user_id": str(driver.user.id),
+            "name": driver_display_name(driver),
+            "points": 0,
+            "wins": 0,
+            "podiums": 0,
+            "races": 0,
+        })
+        row["name"] = driver_display_name(driver)
+        row["races"] = row.get("races", 0) + 1
+        if not driver.retired:
+            row["points"] = row.get("points", 0) + NORMAL_RANKING_POINTS.get(position, 0)
+            if position == 1:
+                row["wins"] = row.get("wins", 0) + 1
+            if position <= 3:
+                row["podiums"] = row.get("podiums", 0) + 1
+    NORMAL_RANKING.setdefault("races", []).append(race.race_id)
+    save_normal_ranking()
+
 def save_championship():
     CHAMPIONSHIP_FILE.write_text(json.dumps(CHAMPIONSHIP, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -2977,6 +3039,31 @@ async def championship_command(ctx):
 @bot.command(name="ranking")
 async def ranking_command(ctx):
     await championship_command(ctx)
+
+
+@bot.command(name="rankingnormal")
+async def normal_ranking_command(ctx):
+    if not ctx.guild:
+        return await ctx.send("O ranking normal só está disponível dentro de um servidor.")
+    rows = normal_ranking_table(ctx.guild.id)
+    if not rows:
+        return await ctx.send("Ainda não há corridas casuais registradas neste servidor.")
+    lines = [
+        f"**P{position} — {row['name']}** • {row.get('points', 0)} pts • "
+        f"{row.get('races', 0)} partidas • {row.get('wins', 0)} vitória(s)"
+        for position, row in enumerate(rows[:20], 1)
+    ]
+    own = next((row for row in rows if row["user_id"] == str(ctx.author.id)), None)
+    description = "\n".join(lines)
+    if own:
+        own_position = next(i for i, row in enumerate(rows, 1) if row["user_id"] == str(ctx.author.id))
+        description += (
+            f"\n\n**Sua posição:** P{own_position} • {own.get('points', 0)} pontos • "
+            f"{own.get('races', 0)} partidas jogadas."
+        )
+    embed = discord.Embed(title="🏁 Ranking das corridas casuais", description=description, color=discord.Color.blue())
+    embed.set_footer(text="Somente corridas !f1 contam neste ranking. Corridas oficiais ficam no !ranking.")
+    await ctx.send(embed=embed)
 
 @bot.command(name="temporada")
 async def season_command(ctx):
@@ -3225,35 +3312,87 @@ async def profile_command(ctx, membro: Optional[discord.Member] = None):
     await ctx.send(embed=build_profile_embed(profile, target, ctx.guild), view=view)
 
 
-@bot.command(name="f1")
-async def create_race(ctx):
-    if ctx.channel.id in races:
-        return await ctx.send("Já existe um lobby/corrida neste canal. Use `!f1cancel`.")
+async def expire_race_lobby(race):
+    try:
+        await asyncio.sleep(600)
+        if not race_is_active(race) or race.race_started:
+            return
+        races.pop(race.race_id, None)
+        if race.message:
+            await race.message.edit(
+                embed=lobby_embed(
+                    race,
+                    title="⌛ Lobby encerrado por inatividade",
+                    description="A classificação e a corrida não foram iniciadas em até 10 minutos.",
+                ),
+                view=ClosedView(),
+            )
+        await race.channel.send("⌛ O lobby do criador <@" + str(race.host_id) + "> foi encerrado após 10 minutos sem iniciar a corrida.")
+    except asyncio.CancelledError:
+        return
+    except discord.HTTPException:
+        return
+
+
+async def create_race_lobby(ctx, mode):
+    guild_id = ctx.guild.id if ctx.guild else 0
+    if mode == "ranked" and not season_for(guild_id):
+        return await ctx.send("🏆 Não existe temporada ativa. Um administrador precisa usar !iniciartemporada nome antes de criar uma corrida oficial.")
     circuit_name = random.choice(list(CIRCUITS.keys()))
     weather_name = random.choice(list(WEATHER.keys()))
     weather = WEATHER[weather_name]
     race = Race(
         channel=ctx.channel,
         channel_id=ctx.channel.id,
-        guild_id=ctx.guild.id if ctx.guild else 0,
+        guild_id=guild_id,
         host_id=ctx.author.id,
         circuit_name=circuit_name,
         weather_name=weather_name,
         ambient_temp=random.randint(*weather["ambient"]),
         track_temp=random.randint(*weather["track"]),
         surface=weather["surface"],
+        mode=mode,
+        max_players=10 if mode == "casual" else 5,
     )
-    races[ctx.channel.id] = race
+    races[race.race_id] = race
     race.message = await ctx.send(embed=lobby_embed(race), view=LobbyView(race))
+    race.lobby_timeout_task = asyncio.create_task(expire_race_lobby(race))
+
+
+@bot.command(name="f1")
+async def create_race(ctx):
+    await create_race_lobby(ctx, "casual")
+
+
+@bot.command(name="f1rank")
+async def create_ranked_race(ctx):
+    await create_race_lobby(ctx, "ranked")
 
 
 @bot.command(name="f1status")
-async def status_command(ctx):
-    race = race_for_channel(ctx.channel.id)
-    if not race:
-        return await ctx.send("Não há lobby/corrida ativa neste canal.")
+async def status_command(ctx, membro: Optional[discord.Member] = None):
+    active = races_for_channel(ctx.channel.id)
+    if membro:
+        active = [race for race in active if race.host_id == membro.id]
+    if not active:
+        return await ctx.send("Não há lobby/corrida ativa correspondente neste canal.")
+    if len(active) > 1:
+        lines = [
+            f"**{'🏆 Oficial' if race.mode == 'ranked' else '🏁 Casual'}** — criador <@{race.host_id}> • "
+            f"{len(race.drivers)}/{race.max_players} pilotos • "
+            f"{'corrida em andamento' if race.race_started else 'aguardando início'}"
+            for race in active
+        ]
+        return await ctx.send(embed=discord.Embed(
+            title="📋 Lobbies ativos neste canal",
+            description="\n".join(lines) + "\n\nUse !f1status @criador para atualizar um painel específico.",
+            color=discord.Color.blurple(),
+        ))
+    race = active[0]
     if race.race_started:
         embed = standings_embed(race, race.current_lap, f"segmento {race.current_segment}", [])
+    elif race.qualifying_done:
+        embed = qualifying_embed(race)
     else:
         embed = lobby_embed(race)
     if race.message:
@@ -3266,22 +3405,44 @@ async def status_command(ctx):
         await ctx.send(embed=embed)
 
 
-@bot.command(name="f1cancel")
-async def cancel_command(ctx):
-    race = race_for_channel(ctx.channel.id)
-    if not race:
-        return await ctx.send("Não há lobby/corrida ativa neste canal.")
-    if ctx.author.id != race.host_id:
-        return await ctx.send("Somente o host pode cancelar.")
+async def cancel_race_instance(race, reason):
+    if race.lobby_timeout_task and not race.lobby_timeout_task.done():
+        race.lobby_timeout_task.cancel()
     if race.race_task and not race.race_task.done():
         race.race_task.cancel()
-    races.pop(ctx.channel.id, None)
+    races.pop(race.race_id, None)
     if race.message:
         try:
-            await race.message.edit(embed=lobby_embed(race, title="🛑 Corrida cancelada"), view=ClosedView())
+            await race.message.edit(
+                embed=lobby_embed(race, title="🛑 Corrida cancelada", description=reason),
+                view=ClosedView(),
+            )
         except discord.HTTPException:
             pass
-    await ctx.send("🛑 Corrida cancelada pelo host.")
+
+
+@bot.command(name="f1cancel")
+async def cancel_command(ctx, membro: Optional[discord.Member] = None):
+    is_admin = bool(ctx.guild and ctx.author.guild_permissions.administrator)
+    if membro:
+        if not is_admin:
+            return await ctx.send("Somente administradores podem cancelar a corrida de outro criador.")
+        race = race_for_channel(ctx.channel.id, host_id=membro.id)
+        if not race:
+            return await ctx.send(f"Não encontrei uma corrida ativa criada por {membro.mention} neste canal.")
+        await cancel_race_instance(race, f"Cancelada por um administrador a pedido da equipe. Criador: {membro.mention}.")
+        return await ctx.send(f"🛑 Corrida criada por {membro.mention} cancelada pelo administrador.")
+    race = race_for_channel(ctx.channel.id, host_id=ctx.author.id)
+    if not race and is_admin:
+        active = races_for_channel(ctx.channel.id)
+        if len(active) == 1:
+            race = active[0]
+        elif len(active) > 1:
+            return await ctx.send("Há vários lobbies ativos. Para escolher um, use !f1cancel @criador.")
+    if not race:
+        return await ctx.send("Não encontrei uma corrida sua neste canal. Administradores podem usar !f1cancel @criador.")
+    await cancel_race_instance(race, f"Cancelada pelo criador <@{ctx.author.id}>.")
+    await ctx.send("🛑 Sua corrida foi cancelada.")
 
 
 _persistent_gacha_views_registered = False
