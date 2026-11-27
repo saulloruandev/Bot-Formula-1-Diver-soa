@@ -2817,7 +2817,7 @@ class RollConfirmView(discord.ui.View):
             "\n".join(f"{RARITY_DATA[r]['emoji']} **{r}** — {RARITY_DATA[r]['chance']}% • {RARITY_DATA[r]['points']} pontos" for r in RARITY_DATA)
         ), color=discord.Color.purple())
         try:
-            await interaction.channel.send(embed=panel_embed, view=GachaRollView(self.owner_id))
+            await interaction.channel.send(content=roll_tag, embed=panel_embed, view=GachaRollView(self.owner_id))
         except discord.HTTPException:
             pass
     @discord.ui.button(label="Aceitar",emoji="✅",style=discord.ButtonStyle.success)
