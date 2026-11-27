@@ -1799,7 +1799,6 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
         skill_bonus += base * 0.006
     tire_mult = tire_weather_multiplier(driver.tire, rain)
     # O desgaste agora gera perda de ritmo progressiva e perceptível, não apenas um bônus quase invisível.
-    tire_condition = max(0.40, 1.0 - (driver.tire_wear / 100.0) ** 1.5 * 0.55)
     tire_wear_penalty = (driver.tire_wear / 100.0) ** 1.5 * 1.20
     tire_loss = max(0.0, 1.0 - tire_mult) * (base * 0.12)
     weather_loss = rain * (base * 0.08)
@@ -2250,7 +2249,6 @@ async def flush_race_broadcasts(race):
             embed = discord.Embed(description=message, color=discord.Color.orange())
             if event_folder:
                 folder = EVENT_ASSET_DIR / event_folder
-                local_images = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}] if folder.exists() else []
                 image_mapping = event_image_links()
                 links_key = event_folder
                 if event_folder == "clima":
@@ -2263,6 +2261,9 @@ async def flush_race_broadcasts(race):
                     }
                     message_lower = message.lower()
                     links_key = next((key for label, key in weather_image_keys.items() if label in message_lower), "clima")
+                    if links_key.startswith("clima_"):
+                        folder = folder / links_key.removeprefix("clima_")
+                local_images = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}] if folder.exists() else []
                 links = image_mapping.get(links_key, image_mapping.get(event_folder, []))
                 if isinstance(links, str):
                     links = [links]
