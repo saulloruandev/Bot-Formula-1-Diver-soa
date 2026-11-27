@@ -8,3 +8,4 @@ __pycache__/
 app/profiles.json
 app/profiles.json.bak
 app/profiles.json.tmp
+app/ranking_normal.json
