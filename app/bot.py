@@ -1180,6 +1180,53 @@ def weather_tire_penalty(tire_key: str, rain_level: float) -> float:
     return max(-0.15, (1.0 - multiplier) * 1.35)
 
 
+CIRCUIT_MAP_POINTS = {
+    "Interlagos": [(120,260),(95,210),(210,110),(330,95),(390,145),(330,205),(420,245),(560,220),(660,260),(610,320),(450,310),(390,275),(300,335),(190,320)],
+    "Monza": [(150,100),(650,100),(680,155),(640,210),(560,200),(520,250),(640,300),(670,350),(500,350),(430,300),(320,315),(250,260),(170,280),(130,220),(190,180)],
+    "Silverstone": [(160,110),(330,85),(410,130),(570,110),(670,180),(610,250),(680,310),(520,340),(410,290),(300,330),(190,270),(120,200)],
+    "Bahrain": [(150,120),(270,90),(360,140),(500,105),(650,150),(620,240),(690,300),(550,340),(430,300),(330,345),(180,300),(120,220)],
+    "Jeddah": [(130,100),(250,80),(310,135),(440,95),(500,145),(640,110),(680,190),(600,220),(690,280),(590,330),(470,285),(350,340),(260,285),(140,310),(100,220)],
+    "Melbourne": [(180,90),(340,95),(430,130),(570,105),(660,180),(620,270),(500,315),(380,290),(300,345),(180,290),(120,200)],
+    "Suzuka": [(120,160),(170,70),(300,75),(350,150),(400,230),(520,235),(590,160),(670,75),(720,170),(650,245),(590,315),(470,300),(400,240),(320,170),(230,220),(170,320),(110,280)],
+    "Shanghai": [(150,100),(300,80),(420,130),(560,100),(660,190),(590,250),(680,320),(500,345),(400,290),(300,340),(170,280),(120,190)],
+    "Miami": [(120,120),(280,90),(360,130),(520,90),(660,150),(630,240),(680,300),(520,335),(420,280),(300,330),(180,270),(100,210)],
+    "Monaco": [(150,120),(270,100),(350,140),(470,120),(560,170),(530,220),(640,240),(610,300),(480,285),(410,330),(300,290),(230,330),(140,270),(190,210)],
+    "Spa-Francorchamps": [(130,300),(100,220),(170,120),(280,85),(380,135),(500,95),(660,145),(620,230),(540,280),(430,250),(360,320),(230,340)],
+    "Zandvoort": [(170,110),(270,55),(400,90),(430,160),(470,230),(590,210),(650,160),(710,230),(640,320),(540,330),(390,300),(300,345),(190,280),(120,200)],
+    "Barcelona": [(140,110),(300,100),(380,145),(550,110),(660,180),(620,250),(680,315),(520,340),(430,285),(300,325),(180,280),(110,210)],
+    "Red Bull Ring": [(150,310),(220,100),(350,140),(480,85),(660,150),(610,290),(470,330),(370,260),(250,340)],
+    "Yas Marina": [(140,100),(280,85),(360,130),(500,100),(650,150),(620,220),(560,250),(650,310),(510,340),(390,290),(300,330),(170,280),(110,200)],
+}
+
+
+def build_circuit_preview_file(race):
+    """Gera a prévia PNG do circuito para o Discord usando Pillow."""
+    width, height = 800, 420
+    image = Image.new("RGB", (width, height), (16, 27, 43))
+    draw = ImageDraw.Draw(image)
+    try:
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
+        small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 15)
+    except OSError:
+        title_font = small_font = ImageFont.load_default()
+    points = CIRCUIT_MAP_POINTS.get(race.circuit_name, CIRCUIT_MAP_POINTS["Interlagos"])
+    path = [(int(x * 0.92 + 32), int(y * 0.88 + 20)) for x, y in points]
+    path.append(path[0])
+    draw.text((32, 20), race.circuit_name.upper(), font=title_font, fill=(245, 248, 255))
+    draw.text((768, 28), "PRÉVIA ESQUEMÁTICA", font=small_font, fill=(143, 167, 189), anchor="ra")
+    draw.line(path, fill=(3, 7, 12), width=44, joint="curve")
+    draw.line(path, fill=(35, 194, 231), width=8, joint="curve")
+    sx, sy = path[0]
+    dx, dy = path[len(path) // 3]
+    draw.ellipse((sx-10, sy-10, sx+10, sy+10), fill=(242, 11, 216), outline=(255,255,255), width=2)
+    draw.ellipse((dx-8, dy-8, dx+8, dy+8), fill=(19, 201, 74), outline=(255,255,255), width=2)
+    draw.text((32, 386), "Mapa ilustrativo • sem escala oficial", font=small_font, fill=(143, 167, 189))
+    output = BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    output.seek(0)
+    return discord.File(output, filename="circuit-preview.png")
+
+
 def lobby_embed(race: Race, title=None, description=None):
     circuit = CIRCUITS[race.circuit_name]
     embed = discord.Embed(
@@ -1212,16 +1259,15 @@ def lobby_embed(race: Race, title=None, description=None):
         embed.add_field(name="🏎️ Pilotos e posições provisórias", value="\n".join(rows), inline=False)
     else:
         embed.add_field(name="🏎️ Pilotos", value="Ninguém entrou ainda.", inline=False)
-    circuit_slug = CIRCUIT_IMAGE_SLUGS.get(race.circuit_name)
-    if circuit_slug:
-        embed.set_image(url=f"https://raw.githubusercontent.com/saulloruandev/Bot-Formula-1-Diver-soa/main/app/assets/circuitos/{circuit_slug}.svg")
+    embed.set_image(url="attachment://circuit-preview.png")
     embed.set_footer(text=f"{'Oficial • pontua na temporada' if race.mode == 'ranked' else 'Casual • ranking normal'} | 15 circuitos • até 10 pilotos • bots opcionais")
     return embed
 
 
 async def refresh_lobby(race, view):
     if race.message:
-        await race.message.edit(embed=lobby_embed(race), view=view)
+        preview = build_circuit_preview_file(race)
+        await race.message.edit(embed=lobby_embed(race), attachments=[preview], view=view)
 
 
 class SkillSelect(discord.ui.Select):
@@ -3604,7 +3650,8 @@ async def create_race_lobby(ctx, mode):
         max_players=10,
     )
     races[race.race_id] = race
-    race.message = await ctx.send(embed=lobby_embed(race), view=LobbyView(race))
+    preview = build_circuit_preview_file(race)
+    race.message = await ctx.send(embed=lobby_embed(race), file=preview, view=LobbyView(race))
     race.lobby_timeout_task = asyncio.create_task(expire_race_lobby(race))
 
 
