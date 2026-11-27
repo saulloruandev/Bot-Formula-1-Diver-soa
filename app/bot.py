@@ -50,6 +50,22 @@ CIRCUITS = {
     },
 }
 
+# Calendário expandido: 15 circuitos disponíveis no sorteio e na configuração do lobby.
+CIRCUITS.update({
+    "Bahrain": {"base_lap": 94.0, "corners": 0.24, "straights": 0.31, "braking": 0.22, "acceleration": 0.15, "control": 0.08, "segments": ["reta", "curva", "reta", "curva", "reta", "curva"]},
+    "Jeddah": {"base_lap": 90.0, "corners": 0.20, "straights": 0.38, "braking": 0.15, "acceleration": 0.17, "control": 0.10, "segments": ["reta", "curva", "reta", "reta", "curva", "reta"]},
+    "Melbourne": {"base_lap": 80.0, "corners": 0.30, "straights": 0.25, "braking": 0.17, "acceleration": 0.16, "control": 0.12, "segments": ["curva", "reta", "curva", "reta", "curva", "reta"]},
+    "Suzuka": {"base_lap": 91.0, "corners": 0.39, "straights": 0.19, "braking": 0.14, "acceleration": 0.15, "control": 0.13, "segments": ["curva", "curva", "curva", "reta", "curva", "reta"]},
+    "Shanghai": {"base_lap": 96.0, "corners": 0.28, "straights": 0.30, "braking": 0.18, "acceleration": 0.14, "control": 0.10, "segments": ["curva", "curva", "reta", "curva", "reta", "reta"]},
+    "Miami": {"base_lap": 91.0, "corners": 0.25, "straights": 0.33, "braking": 0.18, "acceleration": 0.14, "control": 0.10, "segments": ["reta", "curva", "reta", "curva", "reta", "curva"]},
+    "Monaco": {"base_lap": 74.0, "corners": 0.48, "straights": 0.10, "braking": 0.14, "acceleration": 0.12, "control": 0.20, "segments": ["curva", "curva", "curva", "curva", "reta", "curva"]},
+    "Spa-Francorchamps": {"base_lap": 106.0, "corners": 0.31, "straights": 0.29, "braking": 0.15, "acceleration": 0.15, "control": 0.14, "segments": ["reta", "curva", "curva", "reta", "curva", "reta"]},
+    "Zandvoort": {"base_lap": 73.0, "corners": 0.42, "straights": 0.14, "braking": 0.16, "acceleration": 0.12, "control": 0.20, "segments": ["curva", "curva", "curva", "reta", "curva", "curva"]},
+    "Barcelona": {"base_lap": 91.0, "corners": 0.32, "straights": 0.25, "braking": 0.17, "acceleration": 0.14, "control": 0.16, "segments": ["reta", "curva", "curva", "reta", "curva", "reta"]},
+    "Red Bull Ring": {"base_lap": 66.0, "corners": 0.20, "straights": 0.37, "braking": 0.20, "acceleration": 0.15, "control": 0.12, "segments": ["reta", "curva", "reta", "curva", "reta", "curva"]},
+    "Yas Marina": {"base_lap": 88.0, "corners": 0.27, "straights": 0.31, "braking": 0.18, "acceleration": 0.14, "control": 0.14, "segments": ["reta", "curva", "reta", "curva", "reta", "curva"]},
+})
+
 WEATHER = {
     "Sol": {"rain": 0.00, "ambient": (25, 34), "track": (35, 48), "surface": "Seca"},
     "Parcialmente nublado": {"rain": 0.00, "ambient": (21, 30), "track": (29, 40), "surface": "Seca"},
