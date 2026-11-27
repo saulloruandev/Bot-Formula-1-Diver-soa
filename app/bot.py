@@ -50,6 +50,22 @@ CIRCUITS = {
     },
 }
 
+# Calendário expandido: 15 circuitos disponíveis no sorteio e na configuração do lobby.
+CIRCUITS.update({
+    "Bahrain": {"base_lap": 94.0, "corners": 0.24, "straights": 0.31, "braking": 0.22, "acceleration": 0.15, "control": 0.08, "segments": ["reta", "curva", "reta", "curva", "reta", "curva"]},
+    "Jeddah": {"base_lap": 90.0, "corners": 0.20, "straights": 0.38, "braking": 0.15, "acceleration": 0.17, "control": 0.10, "segments": ["reta", "curva", "reta", "reta", "curva", "reta"]},
+    "Melbourne": {"base_lap": 80.0, "corners": 0.30, "straights": 0.25, "braking": 0.17, "acceleration": 0.16, "control": 0.12, "segments": ["curva", "reta", "curva", "reta", "curva", "reta"]},
+    "Suzuka": {"base_lap": 91.0, "corners": 0.39, "straights": 0.19, "braking": 0.14, "acceleration": 0.15, "control": 0.13, "segments": ["curva", "curva", "curva", "reta", "curva", "reta"]},
+    "Shanghai": {"base_lap": 96.0, "corners": 0.28, "straights": 0.30, "braking": 0.18, "acceleration": 0.14, "control": 0.10, "segments": ["curva", "curva", "reta", "curva", "reta", "reta"]},
+    "Miami": {"base_lap": 91.0, "corners": 0.25, "straights": 0.33, "braking": 0.18, "acceleration": 0.14, "control": 0.10, "segments": ["reta", "curva", "reta", "curva", "reta", "curva"]},
+    "Monaco": {"base_lap": 74.0, "corners": 0.48, "straights": 0.10, "braking": 0.14, "acceleration": 0.12, "control": 0.20, "segments": ["curva", "curva", "curva", "curva", "reta", "curva"]},
+    "Spa-Francorchamps": {"base_lap": 106.0, "corners": 0.31, "straights": 0.29, "braking": 0.15, "acceleration": 0.15, "control": 0.14, "segments": ["reta", "curva", "curva", "reta", "curva", "reta"]},
+    "Zandvoort": {"base_lap": 73.0, "corners": 0.42, "straights": 0.14, "braking": 0.16, "acceleration": 0.12, "control": 0.20, "segments": ["curva", "curva", "curva", "reta", "curva", "curva"]},
+    "Barcelona": {"base_lap": 91.0, "corners": 0.32, "straights": 0.25, "braking": 0.17, "acceleration": 0.14, "control": 0.16, "segments": ["reta", "curva", "curva", "reta", "curva", "reta"]},
+    "Red Bull Ring": {"base_lap": 66.0, "corners": 0.20, "straights": 0.37, "braking": 0.20, "acceleration": 0.15, "control": 0.12, "segments": ["reta", "curva", "reta", "curva", "reta", "curva"]},
+    "Yas Marina": {"base_lap": 88.0, "corners": 0.27, "straights": 0.31, "braking": 0.18, "acceleration": 0.14, "control": 0.14, "segments": ["reta", "curva", "reta", "curva", "reta", "curva"]},
+})
+
 WEATHER = {
     "Sol": {"rain": 0.00, "ambient": (25, 34), "track": (35, 48), "surface": "Seca"},
     "Parcialmente nublado": {"rain": 0.00, "ambient": (21, 30), "track": (29, 40), "surface": "Seca"},
@@ -137,6 +153,7 @@ class Driver:
     total_time: float = 0.0
     last_lap_time: float = 0.0
     best_lap_time: Optional[float] = None
+    best_lap_number: Optional[int] = None
     tire_wear: float = 0.0  # 0-100
     energy: float = 100.0  # energia de jogo, 0-100
     distance: float = 0.0  # progresso em unidades de segmento
@@ -1524,6 +1541,25 @@ class ClosedView(discord.ui.View):
             child.disabled = True
 
 
+class PitTireSelect(discord.ui.Select):
+    def __init__(self, decision_view, user_id):
+        self.decision_view = decision_view
+        self.user_id = user_id
+        options = [discord.SelectOption(label=TIRES[key]["label"], value=key) for key in TIRES]
+        super().__init__(placeholder="Escolha o composto para o pit stop", options=options, min_values=1, max_values=1)
+
+    async def callback(self, interaction):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("Esse menu pertence a outro piloto.", ephemeral=True)
+        await self.decision_view.record_choice(interaction, "normal", pit=True, pit_tire=self.values[0])
+
+
+class PitTireView(discord.ui.View):
+    def __init__(self, decision_view, user_id):
+        super().__init__(timeout=60)
+        self.add_item(PitTireSelect(decision_view, user_id))
+
+
 class RaceDecisionView(discord.ui.View):
     """Ações contextuais: traçado em curvas, DRS/Boost/Box em retas."""
     def __init__(self, race):
@@ -1540,10 +1576,16 @@ class RaceDecisionView(discord.ui.View):
             if self.any_driver_in_drs_window():
                 self.add_action("DRS / Ultrapassar", "↗️", "normal", attack=True, row=1)
             self.add_action("Boost Mode", "⚡", "normal", boost=True, row=1)
-            for row, tires in ((2, (("Box: Soft", "Soft", "🔴"), ("Box: Medium", "Medium", "🟡"), ("Box: Hard", "Hard", "⚪"))),
-                               (3, (("Box: Inter", "Intermediate", "🟢"), ("Box: Wet", "Wet", "🔵")))):
-                for label, tire, emoji in tires:
-                    self.add_action(label, emoji, "normal", pit=True, pit_tire=tire, row=row)
+            pit_button = discord.ui.Button(label="Pit Stop", emoji="🛠️", style=discord.ButtonStyle.primary, row=2)
+            async def open_pit_menu(interaction):
+                driver = race.drivers.get(interaction.user.id) if race_is_active(race) else None
+                if driver is None or driver.finished or driver.retired:
+                    return await interaction.response.send_message("Você não é um piloto ativo nesta corrida.", ephemeral=True)
+                if driver.last_pit_lap == race.current_lap:
+                    return await interaction.response.send_message("Você já fez um pit stop nesta volta.", ephemeral=True)
+                await interaction.response.send_message("Escolha o pneu que deseja colocar:", view=PitTireView(self, interaction.user.id), ephemeral=True)
+            pit_button.callback = open_pit_menu
+            self.add_item(pit_button)
 
     def any_driver_in_drs_window(self):
         active = sorted([d for d in self.race.drivers.values() if not d.finished and not d.retired], key=lambda d: d.total_time)
@@ -1831,6 +1873,31 @@ class QualifyingView(discord.ui.View):
         await interaction.response.edit_message(content="🚦 Corrida iniciada! O painel será atualizado a cada trecho.", view=ClosedView())
 
 
+class RemoveDriverSelect(discord.ui.Select):
+    def __init__(self, race):
+        self.race = race
+        options = [discord.SelectOption(label=driver_display_name(driver)[:100], value=str(uid))
+                   for uid, driver in list(race.drivers.items())[:25]]
+        if not options:
+            options = [discord.SelectOption(label="Nenhum piloto inscrito", value="none")]
+        super().__init__(placeholder="Remover um piloto do lobby", options=options, min_values=1, max_values=1, row=4)
+
+    async def callback(self, interaction):
+        if interaction.user.id != self.race.host_id:
+            return await interaction.response.send_message("Somente o criador pode remover pilotos.", ephemeral=True)
+        if not race_is_active(self.race) or self.race.started:
+            return await interaction.response.send_message("O lobby não aceita mais alterações.", ephemeral=True)
+        if self.values[0] == "none":
+            return await interaction.response.send_message("Não há pilotos para remover.", ephemeral=True)
+        uid = int(self.values[0])
+        removed = self.race.drivers.pop(uid, None)
+        if removed:
+            await interaction.response.send_message(f"🏁 {driver_display_name(removed)} foi removido do lobby.", ephemeral=True)
+            await refresh_lobby(self.race, LobbyView(self.race))
+        else:
+            await interaction.response.send_message("Esse piloto não está mais no lobby.", ephemeral=True)
+
+
 class LobbyConfigView(discord.ui.View):
     def __init__(self, race):
         super().__init__(timeout=120)
@@ -1839,6 +1906,7 @@ class LobbyConfigView(discord.ui.View):
         self.add_item(CircuitSelect(race))
         self.add_item(WeatherSelect(race))
         self.add_item(DecisionTimeSelect(race))
+        self.add_item(RemoveDriverSelect(race))
 
 
 class LobbyConfigSelect(discord.ui.Select):
@@ -2029,8 +2097,8 @@ async def build_podium_file(order):
     draw = ImageDraw.Draw(canvas)
     try:
         title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
-        name_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
-        time_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 30)
+        name_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 42)
+        time_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 38)
         fallback_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 34)
     except OSError:
         title_font = name_font = time_font = fallback_font = ImageFont.load_default()
@@ -2241,8 +2309,10 @@ async def run_race(race):
         for driver in race.drivers.values():
             if not driver.finished and not driver.retired:
                 driver.last_lap_time = driver.total_time - lap_start_times.get(driver.user.id, driver.total_time)
-                if driver.last_lap_time > 0 and (driver.best_lap_time is None or driver.last_lap_time < driver.best_lap_time):
+                minimum_valid_lap = circuit["base_lap"] * 0.55
+                if minimum_valid_lap <= driver.last_lap_time < (driver.best_lap_time or float("inf")):
                     driver.best_lap_time = driver.last_lap_time
+                    driver.best_lap_number = lap
         if race.safety_car_laps > 0:
             race.safety_car_laps -= 1
         await asyncio.sleep(0.5)
@@ -2252,13 +2322,14 @@ async def run_race(race):
             driver.finished = True
     fastest = min((d for d in final_order if d.best_lap_time is not None and not d.retired), key=lambda d: d.best_lap_time, default=None)
     if fastest:
-        await publish_important_event(race, f"⏱️ Volta mais rápida: {driver_display_name(fastest)} — {format_time(fastest.best_lap_time)}")
+        await publish_important_event(race, f"⏱️ Volta mais rápida: {driver_display_name(fastest)} — {format_time(fastest.best_lap_time)} (volta {fastest.best_lap_number})")
     if race.mode == "ranked":
         await register_championship_result(race, final_order, fastest)
     else:
         register_normal_result(race, final_order)
     podium = "\n".join(
         f"**{driver_display_name(driver)}** — `{format_time(driver.total_time)}`"
+        + (f" • VR: {format_time(driver.best_lap_time)} (V{driver.best_lap_number})" if driver.best_lap_time else "")
         + (" • Abandonou" if driver.retired else "")
         for driver in final_order
     )
@@ -2978,10 +3049,16 @@ def normal_ranking_table(guild_id):
     )
 
 def register_normal_result(race, order):
+    human_drivers = [driver for driver in order if not getattr(driver, "is_bot", False)]
+    bot_count = len(order) - len(human_drivers)
     if race.mode != "casual" or race.race_id in NORMAL_RANKING.get("races", []):
+        return
+    if len(human_drivers) < 3 or bot_count >= len(human_drivers):
         return
     players = NORMAL_RANKING.setdefault("players", {})
     for position, driver in enumerate(order, 1):
+        if getattr(driver, "is_bot", False):
+            continue
         key = f"{race.guild_id}:{driver.user.id}"
         row = players.setdefault(key, {
             "guild_id": str(race.guild_id),
@@ -3027,7 +3104,8 @@ async def register_championship_result(race, order, fastest):
             "position": position,
             "retired": bool(driver.retired),
             "fastest_lap": bool(fastest and fastest.user.id == driver.user.id),
-            "lap_time": driver.best_lap_time or driver.last_lap_time,
+            "lap_time": driver.best_lap_time,
+            "lap_number": driver.best_lap_number,
         })
     season.setdefault("races", []).append({
         "race_id": race_id, "circuit": race.circuit_name,
@@ -3189,7 +3267,7 @@ def system_embed(page):
     description = (
         "**Modalidades de corrida**\n"
         "• `!f1`: corrida casual com até 10 pilotos, lobbies simultâneos e ranking independente.\n"
-        "• `!f1rank`: corrida oficial com até 5 pilotos; exige temporada ativa e registra pontos no campeonato.\n"
+        "• `!f1rank`: corrida oficial com até 10 pilotos; exige temporada ativa e registra pontos no campeonato.\n"
         "• Lobbies sem corrida iniciada expiram após 10 minutos. Administradores podem usar `!f1cancel @criador`.\n\n"
         "**Rankings**\n"
         "• `!rankingnormal`: pontos e partidas das corridas casuais.\n"
@@ -3229,7 +3307,7 @@ async def commands_list(ctx):
     embed.description = (
         "**CORRIDAS**\n"
         "`!f1` — cria uma corrida casual com até 10 pilotos; não altera o campeonato.\n"
-        "`!f1rank` — cria uma corrida oficial com até 5 pilotos; exige temporada ativa e soma pontos no campeonato.\n"
+        "`!f1rank` — cria uma corrida oficial com até 10 pilotos; exige temporada ativa e soma pontos no campeonato.\n"
         "`!f1status [@criador]` — consulta os lobbies ativos neste canal ou o lobby de um criador específico.\n"
         "`!f1cancel` — o criador cancela a própria corrida. Administradores podem usar `!f1cancel @criador`.\n"
         "`!rankingnormal` — ranking de pontos e partidas das corridas casuais.\n"
@@ -3257,7 +3335,7 @@ async def help_f1(ctx):
     embed.description = (
         "**1) Escolha o tipo de corrida**\n"
         "• `!f1`: corrida casual, até **10 pilotos**, não soma pontos no campeonato. Seus resultados entram no `!rankingnormal`.\n"
-        "• `!f1rank`: corrida oficial, até **5 pilotos**, disponível quando existe uma temporada ativa. Os resultados pontuam no `!ranking` e em `!campeonato`.\n"
+        "• `!f1rank`: corrida oficial, até **10 pilotos**, disponível quando existe uma temporada ativa. Os resultados pontuam no `!ranking` e em `!campeonato`.\n"
         "• É possível manter mais de um lobby ativo ao mesmo tempo, inclusive no mesmo canal. Cada painel controla sua própria corrida. Lobbies que não iniciarem a corrida em 10 minutos são encerrados automaticamente.\n"
         "• O criador pode cancelar com `!f1cancel`. Administradores podem encerrar o lobby de alguém com `!f1cancel @criador`.\n\n"
         "**2) Entrar e preparar o carro**\n"
@@ -3404,7 +3482,7 @@ async def create_race_lobby(ctx, mode):
         track_temp=random.randint(*weather["track"]),
         surface=weather["surface"],
         mode=mode,
-        max_players=10 if mode == "casual" else 5,
+        max_players=10,
     )
     races[race.race_id] = race
     race.message = await ctx.send(embed=lobby_embed(race), view=LobbyView(race))
