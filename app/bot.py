@@ -67,6 +67,24 @@ CIRCUITS.update({
     "Yas Marina": {"base_lap": 88.0, "corners": 0.27, "straights": 0.31, "braking": 0.18, "acceleration": 0.14, "control": 0.14, "segments": ["reta", "curva", "reta", "curva", "reta", "curva"]},
 })
 
+CIRCUIT_IMAGE_SLUGS = {
+    "Interlagos": "interlagos",
+    "Monza": "monza",
+    "Silverstone": "silverstone",
+    "Bahrain": "bahrain",
+    "Jeddah": "jeddah",
+    "Melbourne": "melbourne",
+    "Suzuka": "suzuka",
+    "Shanghai": "shanghai",
+    "Miami": "miami",
+    "Monaco": "monaco",
+    "Spa-Francorchamps": "spa-francorchamps",
+    "Zandvoort": "zandvoort",
+    "Barcelona": "barcelona",
+    "Red Bull Ring": "red-bull-ring",
+    "Yas Marina": "yas-marina"
+}
+
 WEATHER = {
     "Sol": {"rain": 0.00, "ambient": (25, 34), "track": (35, 48), "surface": "Seca"},
     "Parcialmente nublado": {"rain": 0.00, "ambient": (21, 30), "track": (29, 40), "surface": "Seca"},
@@ -1192,6 +1210,9 @@ def lobby_embed(race: Race, title=None, description=None):
         embed.add_field(name="🏎️ Pilotos e posições provisórias", value="\n".join(rows), inline=False)
     else:
         embed.add_field(name="🏎️ Pilotos", value="Ninguém entrou ainda.", inline=False)
+    circuit_slug = CIRCUIT_IMAGE_SLUGS.get(race.circuit_name)
+    if circuit_slug:
+        embed.set_image(url=f"https://raw.githubusercontent.com/saulloruandev/Bot-Formula-1-Diver-soa/main/app/assets/circuitos/{circuit_slug}.svg")
     embed.set_footer(text=f"{'Oficial • pontua na temporada' if race.mode == 'ranked' else 'Casual • ranking normal'} | Distribua 10 pontos, escolha pneus e marque Estou pronto.")
     return embed
 
