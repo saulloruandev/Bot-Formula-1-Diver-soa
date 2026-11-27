@@ -2861,8 +2861,27 @@ class ProfileSkillsModal(discord.ui.Modal, title="Distribuir 10 pontos pessoais"
         if any(value < 0 or value > SKILL_POINTS for value in values) or sum(values) > SKILL_POINTS:
             return await interaction.response.send_message(f"Os cinco valores devem ficar entre 0 e {SKILL_POINTS} e não podem ultrapassar {SKILL_POINTS} pontos somados. Reabra a distribuição e tente novamente.", ephemeral=True)
         partial = {field[0]: value for field, value in zip(SKILL_FIELDS[:5], values)}
+        await interaction.response.send_message(
+            "Os cinco primeiros atributos foram preenchidos. Clique abaixo para informar Controle e salvar a distribuição.",
+            view=ProfileControlSkillView(self.owner_id, self.source_message_id, self.race, partial),
+            ephemeral=True,
+        )
+
+
+class ProfileControlSkillView(discord.ui.View):
+    def __init__(self, owner_id, source_message_id, race, partial):
+        super().__init__(timeout=120)
+        self.owner_id = owner_id
+        self.source_message_id = source_message_id
+        self.race = race
+        self.partial = partial
+
+    @discord.ui.button(label="Definir Controle", emoji="🎯", style=discord.ButtonStyle.primary)
+    async def define_control(self, interaction, button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Essa distribuição pertence a outro piloto.", ephemeral=True)
         await interaction.response.send_modal(ProfileControlSkillModal(
-            self.owner_id, self.source_message_id, self.race, partial
+            self.owner_id, self.source_message_id, self.race, self.partial
         ))
 
 
