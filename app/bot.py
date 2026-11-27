@@ -137,6 +137,7 @@ class Driver:
     total_time: float = 0.0
     last_lap_time: float = 0.0
     best_lap_time: Optional[float] = None
+    best_lap_number: Optional[int] = None
     tire_wear: float = 0.0  # 0-100
     energy: float = 100.0  # energia de jogo, 0-100
     distance: float = 0.0  # progresso em unidades de segmento
@@ -2029,8 +2030,8 @@ async def build_podium_file(order):
     draw = ImageDraw.Draw(canvas)
     try:
         title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
-        name_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
-        time_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 30)
+        name_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 42)
+        time_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 38)
         fallback_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 34)
     except OSError:
         title_font = name_font = time_font = fallback_font = ImageFont.load_default()
@@ -2241,8 +2242,10 @@ async def run_race(race):
         for driver in race.drivers.values():
             if not driver.finished and not driver.retired:
                 driver.last_lap_time = driver.total_time - lap_start_times.get(driver.user.id, driver.total_time)
-                if driver.last_lap_time > 0 and (driver.best_lap_time is None or driver.last_lap_time < driver.best_lap_time):
+                minimum_valid_lap = circuit["base_lap"] * 0.55
+                if minimum_valid_lap <= driver.last_lap_time < (driver.best_lap_time or float("inf")):
                     driver.best_lap_time = driver.last_lap_time
+                    driver.best_lap_number = lap
         if race.safety_car_laps > 0:
             race.safety_car_laps -= 1
         await asyncio.sleep(0.5)
@@ -2252,13 +2255,14 @@ async def run_race(race):
             driver.finished = True
     fastest = min((d for d in final_order if d.best_lap_time is not None and not d.retired), key=lambda d: d.best_lap_time, default=None)
     if fastest:
-        await publish_important_event(race, f"⏱️ Volta mais rápida: {driver_display_name(fastest)} — {format_time(fastest.best_lap_time)}")
+        await publish_important_event(race, f"⏱️ Volta mais rápida: {driver_display_name(fastest)} — {format_time(fastest.best_lap_time)} (volta {fastest.best_lap_number})")
     if race.mode == "ranked":
         await register_championship_result(race, final_order, fastest)
     else:
         register_normal_result(race, final_order)
     podium = "\n".join(
         f"**{driver_display_name(driver)}** — `{format_time(driver.total_time)}`"
+        + (f" • VR: {format_time(driver.best_lap_time)} (V{driver.best_lap_number})" if driver.best_lap_time else "")
         + (" • Abandonou" if driver.retired else "")
         for driver in final_order
     )
@@ -2978,10 +2982,16 @@ def normal_ranking_table(guild_id):
     )
 
 def register_normal_result(race, order):
+    human_drivers = [driver for driver in order if not getattr(driver, "is_bot", False)]
+    bot_count = len(order) - len(human_drivers)
     if race.mode != "casual" or race.race_id in NORMAL_RANKING.get("races", []):
+        return
+    if len(human_drivers) < 3 or bot_count >= len(human_drivers):
         return
     players = NORMAL_RANKING.setdefault("players", {})
     for position, driver in enumerate(order, 1):
+        if getattr(driver, "is_bot", False):
+            continue
         key = f"{race.guild_id}:{driver.user.id}"
         row = players.setdefault(key, {
             "guild_id": str(race.guild_id),
@@ -3027,7 +3037,8 @@ async def register_championship_result(race, order, fastest):
             "position": position,
             "retired": bool(driver.retired),
             "fastest_lap": bool(fastest and fastest.user.id == driver.user.id),
-            "lap_time": driver.best_lap_time or driver.last_lap_time,
+            "lap_time": driver.best_lap_time,
+            "lap_number": driver.best_lap_number,
         })
     season.setdefault("races", []).append({
         "race_id": race_id, "circuit": race.circuit_name,
@@ -3404,7 +3415,7 @@ async def create_race_lobby(ctx, mode):
         track_temp=random.randint(*weather["track"]),
         surface=weather["surface"],
         mode=mode,
-        max_players=10 if mode == "casual" else 5,
+        max_players=10,
     )
     races[race.race_id] = race
     race.message = await ctx.send(embed=lobby_embed(race), view=LobbyView(race))
