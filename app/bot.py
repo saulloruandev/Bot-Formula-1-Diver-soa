@@ -1264,8 +1264,8 @@ def lobby_embed(race: Race, title=None, description=None):
             )
             # O conteúdo individual é limitado preventivamente, mesmo se o
             # jogador usar um nome de perfil muito comprido.
-            if len(driver_line) > 1000:
-                driver_line = driver_line[:997] + "..."
+            if len(driver_line) > 450:
+                driver_line = driver_line[:447] + "..."
             embed.add_field(
                 name=f"🏎️ P{pos} — {driver_display_name(driver)[:220]}",
                 value=driver_line or "Piloto inscrito.",
