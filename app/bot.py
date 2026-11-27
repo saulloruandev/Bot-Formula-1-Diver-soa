@@ -1525,6 +1525,25 @@ class ClosedView(discord.ui.View):
             child.disabled = True
 
 
+class PitTireSelect(discord.ui.Select):
+    def __init__(self, decision_view, user_id):
+        self.decision_view = decision_view
+        self.user_id = user_id
+        options = [discord.SelectOption(label=TIRES[key]["label"], value=key) for key in TIRES]
+        super().__init__(placeholder="Escolha o composto para o pit stop", options=options, min_values=1, max_values=1)
+
+    async def callback(self, interaction):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("Esse menu pertence a outro piloto.", ephemeral=True)
+        await self.decision_view.record_choice(interaction, "normal", pit=True, pit_tire=self.values[0])
+
+
+class PitTireView(discord.ui.View):
+    def __init__(self, decision_view, user_id):
+        super().__init__(timeout=60)
+        self.add_item(PitTireSelect(decision_view, user_id))
+
+
 class RaceDecisionView(discord.ui.View):
     """Ações contextuais: traçado em curvas, DRS/Boost/Box em retas."""
     def __init__(self, race):
@@ -1541,10 +1560,16 @@ class RaceDecisionView(discord.ui.View):
             if self.any_driver_in_drs_window():
                 self.add_action("DRS / Ultrapassar", "↗️", "normal", attack=True, row=1)
             self.add_action("Boost Mode", "⚡", "normal", boost=True, row=1)
-            for row, tires in ((2, (("Box: Soft", "Soft", "🔴"), ("Box: Medium", "Medium", "🟡"), ("Box: Hard", "Hard", "⚪"))),
-                               (3, (("Box: Inter", "Intermediate", "🟢"), ("Box: Wet", "Wet", "🔵")))):
-                for label, tire, emoji in tires:
-                    self.add_action(label, emoji, "normal", pit=True, pit_tire=tire, row=row)
+            pit_button = discord.ui.Button(label="Pit Stop", emoji="🛠️", style=discord.ButtonStyle.primary, row=2)
+            async def open_pit_menu(interaction):
+                driver = race.drivers.get(interaction.user.id) if race_is_active(race) else None
+                if driver is None or driver.finished or driver.retired:
+                    return await interaction.response.send_message("Você não é um piloto ativo nesta corrida.", ephemeral=True)
+                if driver.last_pit_lap == race.current_lap:
+                    return await interaction.response.send_message("Você já fez um pit stop nesta volta.", ephemeral=True)
+                await interaction.response.send_message("Escolha o pneu que deseja colocar:", view=PitTireView(self, interaction.user.id), ephemeral=True)
+            pit_button.callback = open_pit_menu
+            self.add_item(pit_button)
 
     def any_driver_in_drs_window(self):
         active = sorted([d for d in self.race.drivers.values() if not d.finished and not d.retired], key=lambda d: d.total_time)
@@ -1832,6 +1857,31 @@ class QualifyingView(discord.ui.View):
         await interaction.response.edit_message(content="🚦 Corrida iniciada! O painel será atualizado a cada trecho.", view=ClosedView())
 
 
+class RemoveDriverSelect(discord.ui.Select):
+    def __init__(self, race):
+        self.race = race
+        options = [discord.SelectOption(label=driver_display_name(driver)[:100], value=str(uid))
+                   for uid, driver in list(race.drivers.items())[:25]]
+        if not options:
+            options = [discord.SelectOption(label="Nenhum piloto inscrito", value="none")]
+        super().__init__(placeholder="Remover um piloto do lobby", options=options, min_values=1, max_values=1, row=4)
+
+    async def callback(self, interaction):
+        if interaction.user.id != self.race.host_id:
+            return await interaction.response.send_message("Somente o criador pode remover pilotos.", ephemeral=True)
+        if not race_is_active(self.race) or self.race.started:
+            return await interaction.response.send_message("O lobby não aceita mais alterações.", ephemeral=True)
+        if self.values[0] == "none":
+            return await interaction.response.send_message("Não há pilotos para remover.", ephemeral=True)
+        uid = int(self.values[0])
+        removed = self.race.drivers.pop(uid, None)
+        if removed:
+            await interaction.response.send_message(f"🏁 {driver_display_name(removed)} foi removido do lobby.", ephemeral=True)
+            await refresh_lobby(self.race, LobbyView(self.race))
+        else:
+            await interaction.response.send_message("Esse piloto não está mais no lobby.", ephemeral=True)
+
+
 class LobbyConfigView(discord.ui.View):
     def __init__(self, race):
         super().__init__(timeout=120)
@@ -1840,6 +1890,7 @@ class LobbyConfigView(discord.ui.View):
         self.add_item(CircuitSelect(race))
         self.add_item(WeatherSelect(race))
         self.add_item(DecisionTimeSelect(race))
+        self.add_item(RemoveDriverSelect(race))
 
 
 class LobbyConfigSelect(discord.ui.Select):
@@ -3200,7 +3251,7 @@ def system_embed(page):
     description = (
         "**Modalidades de corrida**\n"
         "• `!f1`: corrida casual com até 10 pilotos, lobbies simultâneos e ranking independente.\n"
-        "• `!f1rank`: corrida oficial com até 5 pilotos; exige temporada ativa e registra pontos no campeonato.\n"
+        "• `!f1rank`: corrida oficial com até 10 pilotos; exige temporada ativa e registra pontos no campeonato.\n"
         "• Lobbies sem corrida iniciada expiram após 10 minutos. Administradores podem usar `!f1cancel @criador`.\n\n"
         "**Rankings**\n"
         "• `!rankingnormal`: pontos e partidas das corridas casuais.\n"
@@ -3240,7 +3291,7 @@ async def commands_list(ctx):
     embed.description = (
         "**CORRIDAS**\n"
         "`!f1` — cria uma corrida casual com até 10 pilotos; não altera o campeonato.\n"
-        "`!f1rank` — cria uma corrida oficial com até 5 pilotos; exige temporada ativa e soma pontos no campeonato.\n"
+        "`!f1rank` — cria uma corrida oficial com até 10 pilotos; exige temporada ativa e soma pontos no campeonato.\n"
         "`!f1status [@criador]` — consulta os lobbies ativos neste canal ou o lobby de um criador específico.\n"
         "`!f1cancel` — o criador cancela a própria corrida. Administradores podem usar `!f1cancel @criador`.\n"
         "`!rankingnormal` — ranking de pontos e partidas das corridas casuais.\n"
@@ -3268,7 +3319,7 @@ async def help_f1(ctx):
     embed.description = (
         "**1) Escolha o tipo de corrida**\n"
         "• `!f1`: corrida casual, até **10 pilotos**, não soma pontos no campeonato. Seus resultados entram no `!rankingnormal`.\n"
-        "• `!f1rank`: corrida oficial, até **5 pilotos**, disponível quando existe uma temporada ativa. Os resultados pontuam no `!ranking` e em `!campeonato`.\n"
+        "• `!f1rank`: corrida oficial, até **10 pilotos**, disponível quando existe uma temporada ativa. Os resultados pontuam no `!ranking` e em `!campeonato`.\n"
         "• É possível manter mais de um lobby ativo ao mesmo tempo, inclusive no mesmo canal. Cada painel controla sua própria corrida. Lobbies que não iniciarem a corrida em 10 minutos são encerrados automaticamente.\n"
         "• O criador pode cancelar com `!f1cancel`. Administradores podem encerrar o lobby de alguém com `!f1cancel @criador`.\n\n"
         "**2) Entrar e preparar o carro**\n"
