@@ -3177,22 +3177,24 @@ def system_embed(page):
         return discord.Embed(title="✨ Habilidades especiais", description="As habilidades passivas podem ser obtidas pela roleta `!roll-habilidade`, por 25k sonhos cada giro.\n\n" + "\n".join(lines), color=discord.Color.gold())
     if page == "pilotagem":
         mode_lines = [f"**{data['label']}** — ritmo {data['pace']:+.2f} • risco {data['risk']:+.2f} • defesa {data['defense']:+.2f} • ataque {data['attack']:+.2f}" for data in DRIVING_MODES.values()]
-        skill_lines = [f"{emoji} **{label}** — atributo pessoal; os 10 pontos são distribuídos uma vez e ficam bloqueados." for key, label, emoji in SKILL_FIELDS]
+        skill_lines = [f"{emoji} **{label}** — atributo pessoal; os 10 pontos podem ser redistribuídos pelo perfil ou no lobby." for key, label, emoji in SKILL_FIELDS]
         description = "**Atributos**\n" + "\n".join(skill_lines)
         description += "\n\n**Modos de pilotagem**\n" + "\n".join(mode_lines)
         description += "\n\n**Ações adicionais**\n• Overtake Mode: tenta ultrapassar quando há adversário elegível à frente.\n• Boost Mode: usa energia para buscar ritmo extra.\n• Decisões são privadas até todos os pilotos confirmarem."
         return discord.Embed(title="🏎️ Atributos e pilotagem", description=description, color=discord.Color.blue())
     description = (
-        "**Novidades desta versão**\n"
-        "• Seis atributos pessoais: gerenciamento de pneus, curvas, velocidade, classificação, motor e controle.\n"
-        "• Distribuição fixa de 10 pontos por piloto.\n"
-        "• Habilidades especiais obtidas pela roleta, por 25k sonhos cada giro.\n"
-        "• Campeonato com pontuação, histórico, ranking e estatísticas persistentes.\n"
-        "• Pontos do campeonato: 10 / 7 / 5 / 3 / 1; +1 pela volta mais rápida se terminar no top 3.\n"
-        "• Imagens de eventos configuráveis por pastas e links, com seleção aleatória.\n"
-        "• Circuitos, clima, pneus, desgaste, energia e decisões estratégicas influenciam a simulação.\n\n"
-        "**Comandos úteis**\n"
-        "f1 criar lobby • perfil ver piloto • roll-estilo girar estilo • campeonato consultar temporada • ranking ver classificação."
+        "**Modalidades de corrida**\n"
+        "• `!f1`: corrida casual com até 10 pilotos, lobbies simultâneos e ranking independente.\n"
+        "• `!f1rank`: corrida oficial com até 5 pilotos; exige temporada ativa e registra pontos no campeonato.\n"
+        "• Lobbies sem corrida iniciada expiram após 10 minutos. Administradores podem usar `!f1cancel @criador`.\n\n"
+        "**Rankings**\n"
+        "• `!rankingnormal`: pontos e partidas das corridas casuais.\n"
+        "• `!ranking` e `!campeonato`: classificação da temporada oficial.\n\n"
+        "**Piloto e simulação**\n"
+        "• Seis atributos e 10 pontos redistribuíveis pelo perfil ou lobby.\n"
+        "• Estilo e habilidade únicos equipados; um novo estilo aceito substitui o anterior.\n"
+        "• Pneus, clima, desgaste, energia, pit stops e decisões influenciam a corrida.\n"
+        "• O pódio destaca foto, nome e tempo final de cada piloto."
     )
     return discord.Embed(title="🆕 Novidades e sistemas", description=description, color=discord.Color.green())
 
@@ -3221,16 +3223,26 @@ async def system_command(ctx):
 async def commands_list(ctx):
     embed = discord.Embed(title="📜 Comandos do F1 Discord Racing", color=discord.Color.blue())
     embed.description = (
-        "`!f1` — cria um lobby; o host usa os botões do próprio painel para configurar, classificar e iniciar.\n"
-        "`!perfil [@membro]` — consulta seu perfil ou o de outro piloto.\n`!roll-estilo` — roleta gacha de estilos de pilotos F1.\n`!transferir-giros @membro quantidade` — transfere giros de estilo.\n`!roll-habilidade` — roleta de habilidades especiais (25k sonhos por giro).\n`!habilidade-pendente` — recupera um resultado pendente.\n`!roll-pendente` — recupera resultado aguardando confirmação.\n`!loja` — loja visual de giros (sonhos da Loritta; confirmação manual).\n`!colecao-estilos` — mostra estilos obtidos.\n`/adicionar_giros`, `/adicionar_giros_habilidade`, `/deletar_giros`, `/setar_estilo` e `/gamepass` — administração de giros/estilos/habilidades.\n"
-        "`!ajuda` — guia de funcionamento e explicação das estratégias.\n"
-        "`!campeonato` / `!ranking` / `!estatisticas` / `!temporada` / `!resultado` — consultar campeonato, etapa e desempenho.\n"
-        "`!iniciartemporada` / `!finalizartemporada` / `!resetcampeonato` — gestão de temporada (administradores).\n"
-        "`!sistema` — painel interativo com explicações de estilos, pneus, habilidades, atributos e novidades.\n"
-        "`!comandos` — exibe esta lista.\n"
-        "`!f1status` — mostra estado do lobby/corrida.\n"
-        "`!f1cancel` — cancela lobby/corrida (somente host).\n\n"
-        "Não existem mais `!f1start` e `!f1race`: classificação e início da corrida são feitos pelos botões no painel `!f1`."
+        "**CORRIDAS**\n"
+        "`!f1` — cria uma corrida casual com até 10 pilotos; não altera o campeonato.\n"
+        "`!f1rank` — cria uma corrida oficial com até 5 pilotos; exige temporada ativa e soma pontos no campeonato.\n"
+        "`!f1status [@criador]` — consulta os lobbies ativos neste canal ou o lobby de um criador específico.\n"
+        "`!f1cancel` — o criador cancela a própria corrida. Administradores podem usar `!f1cancel @criador`.\n"
+        "`!rankingnormal` — ranking de pontos e partidas das corridas casuais.\n"
+        "`!ranking` / `!campeonato` — classificação da temporada oficial.\n\n"
+        "**PILOTO E PERFIL**\n"
+        "`!perfil [@membro]` — consulta perfil, atributos, estilo e habilidade.\n"
+        "`!roll-estilo` — roleta de estilos; aceitar um novo substitui o estilo ativo.\n"
+        "`!roll-habilidade` — roleta de habilidades especiais.\n"
+        "`!transferir-giros @membro quantidade` — transfere giros de estilo.\n"
+        "`!loja` / `!colecao-estilos` — loja e consulta do estilo atual.\n"
+        "`!roll-pendente` / `!habilidade-pendente` — recupera resultados pendentes.\n"
+        "`/adicionar_giros`, `/adicionar_giros_habilidade`, `/deletar_giros`, `/setar_estilo` e `/gamepass` — administração.\n\n"
+        "**TEMPORADA E INFORMAÇÕES**\n"
+        "`!iniciartemporada`, `!finalizartemporada`, `!resetcampeonato` — gestão da temporada (administradores).\n"
+        "`!temporada`, `!resultado`, `!estatisticas` — dados da temporada.\n"
+        "`!ajuda` — guia completo de como jogar.\n"
+        "`!sistema` — painel interativo de atributos, pneus, estilos e habilidades."
     )
     await ctx.send(embed=embed)
 
@@ -3239,25 +3251,35 @@ async def commands_list(ctx):
 async def help_f1(ctx):
     embed = discord.Embed(title="📘 Guia de corrida — F1 Discord Racing", color=discord.Color.green())
     embed.description = (
-        "**1) Criar e entrar:** use `!f1`. Pilotos clicam Entrar na corrida, configuram o carro e os pneus, e marcam Estou pronto.\n"
-        "**2) Perfil/crachá:** `!perfil [@membro]` consulta o próprio perfil ou o perfil de outro piloto; os botões de configuração aparecem apenas no próprio perfil.\n**3) Gacha:** `!roll-estilo` permite gastar giros para obter estilos de pilotos. `!transferir-giros @membro quantidade` envia giros de estilo para outro membro. `!roll-habilidade` usa um giro de habilidade liberado pelo administrador após pagamento de 25k sonhos. `!loja` mostra pacotes em sonhos; a compra é confirmada manualmente e o bot não desconta sonhos. `!colecao-estilos` lista os estilos recebidos. Os estilos têm raridades e pontos extras próprios. Nome aparece na corrida; equipe e pneu favorito são visuais, sem impacto na simulação. Perfil salvo é carregado no próximo lobby; os pontos pessoais só podem ser distribuídos uma vez e depois ficam bloqueados.\n"
-        "**4) Classificação:** o host clica Iniciar classificação no painel do lobby. A classificação usa habilidades, pneus, clima e uma variação aleatória moderada para definir o grid.\n"
-        "**5) Corrida:** o host clica Iniciar corrida no painel de classificação. Cada volta é dividida em quatro trechos de reta/curva. Em cada trecho, todos escolhem pelos mesmos botões públicos; a escolha fica oculta até todos confirmarem. O prazo é 45 segundos (ou o valor configurado); quem não decidir recebe Seguro.\n\n"
+        "**1) Escolha o tipo de corrida**\n"
+        "• `!f1`: corrida casual, até **10 pilotos**, não soma pontos no campeonato. Seus resultados entram no `!rankingnormal`.\n"
+        "• `!f1rank`: corrida oficial, até **5 pilotos**, disponível quando existe uma temporada ativa. Os resultados pontuam no `!ranking` e em `!campeonato`.\n"
+        "• É possível manter mais de um lobby ativo ao mesmo tempo, inclusive no mesmo canal. Cada painel controla sua própria corrida. Lobbies que não iniciarem a corrida em 10 minutos são encerrados automaticamente.\n"
+        "• O criador pode cancelar com `!f1cancel`. Administradores podem encerrar o lobby de alguém com `!f1cancel @criador`.\n\n"
+        "**2) Entrar e preparar o carro**\n"
+        "Clique em **Entrar na corrida**, depois em **Configurar carro** para distribuir os 10 pontos entre Gerenciamento de pneus, Curvas, Velocidade, Classificação, Motor e Controle. A tela mostra os nomes e valores; escolha o atributo e depois a quantidade de pontos. Você pode ajustar a distribuição novamente quando quiser. Escolha também os pneus e marque **Estou pronto**.\n\n"
+        "**3) Classificação e largada**\n"
+        "O criador inicia a classificação pelo botão do lobby. O grid é definido por atributos, pneus, clima e variação aleatória. Depois, o criador usa **Iniciar corrida** no painel da classificação.\n\n"
+        "**4) Durante a corrida**\n"
+        "Cada volta possui seis trechos de reta e curva. Em cada trecho, os pilotos escolhem suas ações pelos botões do painel. As escolhas ficam ocultas até todos confirmarem. O prazo padrão é 45 segundos; quem não decidir recebe a opção Seguro.\n\n"
         "**AÇÕES DE PILOTAGEM**\n"
-        "⚖️ **Normal:** ritmo equilibrado, risco padrão e pequena recuperação de energia quando não usa Boost/Overtake. É a opção versátil.\n"
-        "🔥 **Agressivo:** tenta ganhar tempo com ritmo mais rápido e maior potencial de ataque, mas aumenta o risco de erro/derrapagem e o desgaste dos pneus.\n"
-        "🛡️ **Defensivo:** prioriza preservar a posição e reduzir riscos; perde um pouco de ritmo e tem menor força de ataque.\n"
-        "🟢 **Seguro:** ritmo mais conservador, risco reduzido e desgaste menor. Bom para proteger pneus ou evitar erros, mas tende a perder tempo.\n"
-        "↗️ **Overtake Mode:** seleciona uma tentativa de ultrapassagem. Só é elegível se houver um carro imediatamente à frente dentro da janela de 1,0 segundo e energia suficiente (12). Gasta energia; chance depende da diferença, atributos e fatores aleatórios. Não garante ultrapassar. Se estiver fora da janela/sem energia, a tentativa aplica penalidade.\n"
-        "⚡ **Boost Mode:** usa 15 de energia para ganhar ritmo no trecho. Se não houver energia suficiente, não ativa e a simulação aplica uma penalidade leve.\n\n"
-        "**CARRO, PNEUS E CONDIÇÕES**\n"
-        "• Gerenciamento de pneus reduz desgaste; Curvas melhora trechos técnicos; Velocidade favorece retas e ultrapassagens; Classificação melhora o grid; Motor ajuda na aceleração; Controle reduz riscos. Os 10 pontos pessoais ficam bloqueados após a primeira distribuição.\n"
-        "• Soft: rápido, mas desgasta muito. Medium: equilíbrio. Hard: menos aderência, maior durabilidade. Intermediate: indicado para pista úmida. Wet: melhor para chuva forte, mas fraco em pista seca. Pneus inadequados prejudicam o ritmo.\n"
-        "• O desgaste reduz a condição do pneu ao longo dos segmentos. A energia é limitada e pode ser recuperada um pouco com Normal/Seguro. Clima chuvoso aumenta a perda de ritmo e o risco.\n"
-        "• Erros e derrapagens são eventos probabilísticos; Controle, modo escolhido, chuva e desgaste influenciam o risco.\n"
-        "• Habilidades especiais podem ser obtidas com `!roll-habilidade`; cada giro custa 25k sonhos e é liberado pelo administrador após pagamento. Use `!habilidade-pendente` se precisar recuperar um resultado interrompido.\n"
-        "• Campeonato: 1º 10 pts, 2º 7, 3º 5, 4º 3, 5º 1; volta mais rápida vale +1 se o piloto terminar no top 3. Abandono não pontua.\n\n"
-        "**Botões de gestão:** Configurar corrida permite ao host escolher voltas, circuito, clima e prazo de decisão. Iniciar classificação e Iniciar corrida avançam o fluxo sem comandos separados."
+        "⚖️ **Normal:** ritmo equilibrado, risco padrão e pequena recuperação de energia.\n"
+        "🔥 **Agressivo:** mais ritmo e potencial de ataque, mas aumenta risco e desgaste.\n"
+        "🛡️ **Defensivo:** protege posição e reduz riscos, com perda de ritmo.\n"
+        "🟢 **Seguro:** ritmo conservador, menor risco e desgaste.\n"
+        "↗️ **Overtake Mode:** tenta ultrapassar o carro à frente quando está dentro da janela de 1 segundo e há energia suficiente. Não garante a manobra.\n"
+        "⚡ **Boost Mode:** consome 15 de energia para buscar ritmo extra.\n\n"
+        "**5) CARRO, PNEUS E CLIMA**\n"
+        "• Gerenciamento de pneus reduz desgaste; Curvas melhora trechos técnicos; Velocidade favorece retas; Classificação melhora o grid; Motor ajuda na aceleração; Controle reduz riscos.\n"
+        "• Soft é rápido e desgasta mais; Medium equilibra; Hard dura mais; Intermediate é indicado para pista úmida; Wet é indicado para chuva forte. Pneus inadequados provocam perda de ritmo, desgaste e risco adicionais.\n"
+        "• O desgaste reduz a aderência. Energia pode ser recuperada um pouco com Normal e Seguro. Pit stops trocam pneus, reparam parte do dano e acrescentam tempo à parada.\n"
+        "• Erros, derrapagens, acidentes e mudanças de clima são probabilísticos. A transmissão informa ultrapassagens, incidentes e acontecimentos importantes.\n\n"
+        "**6) PONTUAÇÃO E RANKINGS**\n"
+        "• Corridas casuais (`!f1`): ranking separado, com pontos e partidas jogadas. Consulte `!rankingnormal`.\n"
+        "• Corridas oficiais (`!f1rank`): 1º = 10, 2º = 7, 3º = 5, 4º = 3, 5º = 1; +1 pela volta mais rápida se terminar no top 3. Abandono não pontua.\n"
+        "• Use `!ranking`, `!campeonato`, `!temporada`, `!resultado` e `!estatisticas` para consultar a temporada.\n\n"
+        "**7) PERFIL E HABILIDADES**\n"
+        "`!perfil` mostra seu piloto. Ao abrir **Configurar**, os campos vêm preenchidos com os dados atuais; altere somente o que desejar e mantenha os demais valores. Estilos e habilidades são únicos/equipados, não coleções acumuláveis. Use `!roll-estilo` e `!roll-habilidade` para obter novos resultados."
     )
     embed.set_footer(text="As mecânicas são uma simulação simplificada e não reproduzem integralmente as regras oficiais da F1.")
     await ctx.send(embed=embed)
