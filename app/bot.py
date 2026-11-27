@@ -1600,7 +1600,7 @@ def calculate_qualifying_time(driver, race):
     tire_delta = (tire_weather_multiplier(driver.tire, rain) - 1.0) * 2.8
     weather_penalty = rain * 1.8
     if driver.ability == "Motorista de Qualificação":
-        skill_delta += 0.20
+        skill_delta += 0.32
     random_delta = random.uniform(-0.22, 0.22)
     return max(60.0, circuit["base_lap"] - skill_delta * 0.65 + tire_delta + weather_penalty + random_delta)
 
@@ -1816,7 +1816,7 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
         driver.tire_warning_lap = race.current_lap
         event = (event + " " if event else "") + f"⚠️ {driver_display_name(driver)} está com pneus inadequados para a pista ({TIRES[driver.tire]['label']})."
     if driver.ability == "Rei da Chuva":
-        weather_loss *= 0.90
+        weather_loss *= 0.82
     mode_adjustment = mode["pace"]
     line_risk = 0.0
     if segment == "curva":
@@ -1873,9 +1873,9 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     risk += curve_intensity * max(0, 5 - driver.effective_skill("curves")) * 0.008
     risk += curve_intensity * max(0, 5 - driver.effective_skill("control")) * 0.009
     if driver.ability == "Mãos de Cirurgião":
-        risk -= 0.008
+        risk -= 0.015
     if driver.ability == "Sangue Frio" and action["mode"] == "aggressive":
-        risk -= 0.006
+        risk -= 0.012
     risk += max(0, -mode["pace"]) * 0.30  # agressividade/ação rápida
     risk = max(0.004, min(0.30, risk))
 
@@ -1903,7 +1903,7 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     wear_increment = TIRES[driver.tire]["wear"] * (0.75 if segment == "reta" else 1.15)
     wear_increment *= max(0.75, 1.0 - driver.effective_skill("tyre_management") * 0.025)
     if driver.ability == "Mestre dos Pneus":
-        wear_increment *= 0.90
+        wear_increment *= 0.82
     if driver.ability == "Pit Stop Perfeito" and race.current_lap == 1 and segment == "reta":
         wear_increment *= 0.85
     if action["mode"] == "aggressive":
@@ -2431,10 +2431,10 @@ async def run_race(race):
                 if action.get("attack") and prior_gap is not None and prior_gap <= OVERTAKE_DETECTION_SECONDS:
                     chance = 0.18 + driver.effective_skill("straights") * 0.035 + driver.effective_skill("acceleration") * 0.025 + driver.effective_skill("control") * 0.015
                     if driver.ability in ("Ultrapassador Nato", "Especialista em DRS"):
-                        chance += 0.035
+                        chance += 0.065
                     chance -= target.effective_skill("control") * 0.018
                     if target.ability == "Defensor Nato":
-                        chance -= 0.035
+                        chance -= 0.060
                     chance = max(0.08, min(0.68, chance))
                     gap_after_segment = driver.total_time - target.total_time
                     if random.random() < chance and 0 < gap_after_segment <= 0.65:
