@@ -1798,7 +1798,9 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     if driver.ability == "Última Volta" and race.current_lap == race.total_laps:
         skill_bonus += base * 0.006
     tire_mult = tire_weather_multiplier(driver.tire, rain)
-    tire_condition = max(0.60, 1.0 - driver.tire_wear / 160.0)
+    # O desgaste agora gera perda de ritmo progressiva e perceptível, não apenas um bônus quase invisível.
+    tire_condition = max(0.40, 1.0 - (driver.tire_wear / 100.0) ** 1.5 * 0.55)
+    tire_wear_penalty = (driver.tire_wear / 100.0) ** 1.5 * 1.20
     tire_loss = max(0.0, 1.0 - tire_mult) * (base * 0.12)
     weather_loss = rain * (base * 0.08)
     mismatch_loss = 0.0
@@ -1863,13 +1865,13 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     damage_penalty = driver.car_damage * 0.0018
     mode_risk = mode["risk"]
     random_error = random.uniform(-0.12, 0.12)  # moderado
-    time = base - skill_bonus - (tire_condition * 0.12) + tire_loss + weather_loss + mismatch_loss + mode_adjustment + energy_adjustment + random_error + base * damage_penalty + pit_penalty
+    time = base - skill_bonus + tire_wear_penalty + tire_loss + weather_loss + mismatch_loss + mode_adjustment + energy_adjustment + random_error + base * damage_penalty + pit_penalty
 
     curve_intensity = 1.0 if segment == "curva" else 0.35
     risk = 0.010 + mode["risk"] + line_risk + rain * (0.075 if segment == "curva" else 0.035)
     if wrong_tire:
         risk += 0.055 if rain > 0.65 else 0.025
-    risk += (driver.tire_wear / 100) * 0.11 + (driver.car_damage / 100) * 0.085
+    risk += (driver.tire_wear / 100) * 0.16 + (driver.car_damage / 100) * 0.085
     risk += curve_intensity * max(0, 5 - driver.effective_skill("curves")) * 0.008
     risk += curve_intensity * max(0, 5 - driver.effective_skill("control")) * 0.009
     if driver.ability == "Mãos de Cirurgião":
@@ -1900,8 +1902,8 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
         driver.events.append("—")
 
     # Desgaste progride em cada segmento e afeta ritmo nos segmentos futuros.
-    wear_increment = TIRES[driver.tire]["wear"] * (0.75 if segment == "reta" else 1.15)
-    wear_increment *= max(0.75, 1.0 - driver.effective_skill("tyre_management") * 0.025)
+    wear_increment = TIRES[driver.tire]["wear"] * (1.35 if segment == "reta" else 2.15)
+    wear_increment *= max(0.65, 1.0 - driver.effective_skill("tyre_management") * 0.035)
     if driver.ability == "Mestre dos Pneus":
         wear_increment *= 0.82
     if driver.ability == "Pit Stop Perfeito" and race.current_lap == 1 and segment == "reta":
@@ -1968,6 +1970,12 @@ def standings_embed(race, lap, segment_label, events):
         value=f"**{race.weather_name}** · {race.surface} · Ambiente {race.ambient_temp}°C · Pista {race.track_temp}°C",
         inline=False,
     )
+    if race.safety_car_laps > 0:
+        embed.add_field(
+            name="🚨 JANELA DE PIT STOP DO SAFETY CAR",
+            value="**É nesta janela que a parada custa menos tempo:** cerca de 6s + tempo da equipe, em vez dos 18s + equipe de um pit stop normal. A vantagem só vale enquanto o Safety Car estiver ativo; depois, a parada volta ao custo normal.",
+            inline=False,
+        )
     return embed
 
 
@@ -2243,18 +2251,33 @@ async def flush_race_broadcasts(race):
             if event_folder:
                 folder = EVENT_ASSET_DIR / event_folder
                 local_images = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}] if folder.exists() else []
-                links = event_image_links().get(event_folder, [])
+                image_mapping = event_image_links()
+                links_key = event_folder
+                if event_folder == "clima":
+                    weather_image_keys = {
+                        "sol": "clima_sol",
+                        "parcialmente nublado": "clima_parcialmente_nublado",
+                        "nublado": "clima_nublado",
+                        "chuva leve": "clima_chuva_leve",
+                        "chuva forte": "clima_chuva_forte",
+                    }
+                    message_lower = message.lower()
+                    links_key = next((key for label, key in weather_image_keys.items() if label in message_lower), "clima")
+                links = image_mapping.get(links_key, image_mapping.get(event_folder, []))
                 if isinstance(links, str):
                     links = [links]
                 links = [url for url in links if isinstance(url, str) and url.startswith(("https://", "http://"))]
-                if local_images:
-                    asset = random.choice(local_images)
-                    file = discord.File(asset, filename=asset.name)
-                    embed.set_image(url=f"attachment://{asset.name}")
-                    await race.channel.send(content=emoji, embed=embed, file=file)
-                elif links:
-                    embed.set_image(url=random.choice(links))
-                    await race.channel.send(content=emoji, embed=embed)
+                # Sorteia entre arquivos locais e URLs, em vez de sempre priorizar a primeira fonte.
+                image_options = [("local", asset) for asset in local_images] + [("url", url) for url in links]
+                if image_options:
+                    image_type, selected_image = random.choice(image_options)
+                    if image_type == "local":
+                        file = discord.File(selected_image, filename=selected_image.name)
+                        embed.set_image(url=f"attachment://{selected_image.name}")
+                        await race.channel.send(content=emoji, embed=embed, file=file)
+                    else:
+                        embed.set_image(url=selected_image)
+                        await race.channel.send(content=emoji, embed=embed)
                 else:
                     await race.channel.send(content=f"{emoji} {message}")
             else:
@@ -2530,12 +2553,35 @@ async def run_race(race):
         await register_championship_result(race, final_order, fastest)
     else:
         register_normal_result(race, final_order)
-    podium = "\n".join(
-        f"**{driver_display_name(driver)}** — `{format_time(driver.total_time)}`"
-        + (f" • VR: {format_time(driver.best_lap_time)} (V{driver.best_lap_number})" if driver.best_lap_time else "")
-        + (" • Abandonou" if driver.retired else "")
-        for driver in final_order
-    )
+    human_drivers = [driver for driver in final_order if not getattr(driver, "is_bot", False)]
+    bot_count = len(final_order) - len(human_drivers)
+    points_allowed = len(human_drivers) >= 3 and bot_count <= len(human_drivers)
+    if race.mode == "ranked":
+        points_allowed = points_allowed and season_for(race.guild_id) is not None
+        points_multiplier = 0.50 if race.total_laps <= 3 else 0.75 if race.total_laps <= 5 else 1.0
+    podium_lines = []
+    for position, driver in enumerate(final_order, 1):
+        if getattr(driver, "is_bot", False):
+            points_label = "• 🤖 IA"
+        elif not points_allowed:
+            points_label = "• sem pontuação nesta corrida"
+        elif driver.retired:
+            points_label = "• 0 pts"
+        elif race.mode == "ranked":
+            earned = CHAMPIONSHIP_POINTS.get(position, 0) * points_multiplier
+            if fastest and fastest.user.id == driver.user.id and position <= 3:
+                earned += 1 * points_multiplier
+            points_label = f"• **{round(earned, 2):g} pts**"
+        else:
+            earned = NORMAL_RANKING_POINTS.get(position, 0)
+            points_label = f"• **{earned} pts**"
+        line = f"**P{position} — {driver_display_name(driver)}** — `{format_time(driver.total_time)}` {points_label}"
+        if driver.best_lap_time:
+            line += f" • VR: {format_time(driver.best_lap_time)} (V{driver.best_lap_number})"
+        if driver.retired:
+            line += " • Abandonou"
+        podium_lines.append(line)
+    podium = "\n".join(podium_lines)
     title = "🏁 VITÓRIA ANTECIPADA" if race.early_finish else "🏆 FIM DE CORRIDA — RESULTADO FINAL"
     embed = discord.Embed(title=title, description=podium or "Corrida encerrada sem pilotos classificados.", color=discord.Color.gold())
     embed.set_footer(text=f"{race.circuit_name} • {race.current_lap}/{race.total_laps} voltas • corrida concluída")
@@ -3449,9 +3495,45 @@ async def reset_championship_command(ctx):
     save_championship()
     await ctx.send("♻️ Resultados da temporada ativa foram reiniciados.")
 
-SYSTEM_PAGES = ("estilos", "pneus", "habilidades", "pilotagem", "novidades")
+SYSTEM_PAGES = ("corrida", "acoes", "pneus", "pilotagem", "estilos", "habilidades", "novidades")
 
 def system_embed(page):
+    if page == "corrida":
+        description = (
+            "**1. Criar e entrar**\n"
+            "• `!f1`: cria uma corrida casual. `!f1rank`: cria uma etapa oficial e exige temporada ativa.\n"
+            "• **Entrar na corrida** coloca você no lobby. **Configurar carro** distribui seus 10 pontos pessoais e permite escolher os pneus. **Estou pronto** confirma que terminou a configuração.\n"
+            "• O host usa **Configurar lobby** para escolher voltas, circuito, clima e tempo de decisão. **Adicionar bots** preenche vagas com pilotos controlados pelo bot.\n"
+            "• **Iniciar classificação** calcula o grid. Na tela seguinte, somente o host usa **Iniciar corrida**. A posição no grid influencia a largada.\n\n"
+            "**2. Como funciona uma corrida**\n"
+            "• Cada volta é dividida em 6 trechos. O painel mostra posição, tempo, pneus, desgaste, energia, dano e clima.\n"
+            "• Em cada trecho, todos escolhem uma ação. As escolhas ficam escondidas até a rodada de decisões terminar; quem não escolher a tempo recebe automaticamente **Seguro**.\n"
+            "• A palavra **rodada** nas imagens significa um *spin*: o carro perde aderência/controle e gira ou sai da linha, não é uma volta da corrida.\n\n"
+            "**3. Pit Stop e Safety Car**\n"
+            "• O botão **Pit Stop** abre um menu privado para escolher o novo composto. A parada normal custa aproximadamente 18s + tempo da equipe. Fazer uma parada sem necessidade pode fazer você perder posições.\n"
+            "• Cada piloto começa com um jogo e tem direito a apenas uma troca. Não é possível fazer várias paradas para trocar pneus.\n"
+            "• Quando o Safety Car está ativo, aparece **Pit Stop (Safety Car)** nas curvas e a parada custa cerca de 6s + equipe. Essa redução vale somente durante essa janela; depois, volta ao custo normal.\n"
+            "• Durante o Safety Car, o pelotão é aproximado. Por isso, parar nessa janela pode custar menos posições do que parar em ritmo normal."
+        )
+        return discord.Embed(title="🏁 Guia para começar uma corrida", description=description, color=discord.Color.green())
+    if page == "acoes":
+        description = (
+            "**Botões em retas**\n"
+            "• **Manter ritmo:** opção equilibrada, sem gastar energia.\n"
+            "• **Defender posição:** prioriza proteger sua colocação, sacrificando um pouco de ritmo.\n"
+            "• **DRS / Ultrapassar:** só aparece quando há um adversário até 1 segundo à frente. Gasta 12 de energia e tenta a ultrapassagem; não é garantido.\n"
+            "• **Boost Mode:** gasta 15 de energia para ganhar ritmo naquele trecho.\n"
+            "• **Pit Stop:** abre a escolha de pneus. Use quando o desgaste estiver prejudicando seu tempo ou quando o clima exigir outro composto.\n\n"
+            "**Botões em curvas**\n"
+            "• **Por dentro:** linha mais curta e rápida, mas com maior risco de contato.\n"
+            "• **Por fora:** linha mais longa, com risco menor.\n"
+            "• **Defender a linha:** tenta impedir a ultrapassagem e protege posição, com pequena perda de ritmo.\n"
+            "• **Traçado seguro:** sacrifica mais tempo para reduzir o risco de erro.\n"
+            "• **Pit Stop (Safety Car):** aparece nas curvas somente enquanto o Safety Car está ativo. É a oportunidade de parar com perda reduzida.\n\n"
+            "**Como decidir?**\n"
+            "Não use Boost/DRS em toda reta sem pensar na energia. Evite parar com pneus ainda bons, pois uma parada normal custa bastante tempo. Se o desgaste estiver alto, compare o tempo que você pode recuperar com o tempo perdido no box."
+        )
+        return discord.Embed(title="🎮 O que cada botão faz", description=description, color=discord.Color.blue())
     if page == "estilos":
         rarity_lines = [f"{data['emoji']} **{rarity}** — {data['points']} pontos extras • chance {data['chance']}%" for rarity, data in RARITY_DATA.items()]
         stat_labels = {"tyre_management":"PNE","curves":"CUR","straights":"RET","braking":"CLA","acceleration":"MOT","control":"CTL"}
@@ -3503,20 +3585,24 @@ class SystemView(discord.ui.View):
         super().__init__(timeout=300)
     async def show(self, interaction, page):
         await interaction.response.edit_message(embed=system_embed(page), view=self)
-    @discord.ui.button(label="Estilos", emoji="🎭", style=discord.ButtonStyle.primary, row=0)
-    async def styles(self, interaction, button): await self.show(interaction, "estilos")
-    @discord.ui.button(label="Pneus", emoji="🛞", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Começar corrida", emoji="🏁", style=discord.ButtonStyle.primary, row=0)
+    async def race_guide(self, interaction, button): await self.show(interaction, "corrida")
+    @discord.ui.button(label="Botões da corrida", emoji="🎮", style=discord.ButtonStyle.success, row=0)
+    async def actions(self, interaction, button): await self.show(interaction, "acoes")
+    @discord.ui.button(label="Pneus e clima", emoji="🛞", style=discord.ButtonStyle.secondary, row=1)
     async def tires(self, interaction, button): await self.show(interaction, "pneus")
-    @discord.ui.button(label="Habilidades", emoji="✨", style=discord.ButtonStyle.secondary, row=0)
-    async def abilities(self, interaction, button): await self.show(interaction, "habilidades")
-    @discord.ui.button(label="Atributos e pilotagem", emoji="🏎️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Atributos", emoji="🏎️", style=discord.ButtonStyle.secondary, row=1)
     async def driving(self, interaction, button): await self.show(interaction, "pilotagem")
-    @discord.ui.button(label="Novidades", emoji="🆕", style=discord.ButtonStyle.success, row=1)
+    @discord.ui.button(label="Estilos", emoji="🎭", style=discord.ButtonStyle.secondary, row=2)
+    async def styles(self, interaction, button): await self.show(interaction, "estilos")
+    @discord.ui.button(label="Habilidades", emoji="✨", style=discord.ButtonStyle.secondary, row=2)
+    async def abilities(self, interaction, button): await self.show(interaction, "habilidades")
+    @discord.ui.button(label="Novidades", emoji="🆕", style=discord.ButtonStyle.secondary, row=3)
     async def news(self, interaction, button): await self.show(interaction, "novidades")
 
 @bot.command(name="sistema")
 async def system_command(ctx):
-    await ctx.send(embed=system_embed("novidades"), view=SystemView())
+    await ctx.send(embed=system_embed("corrida"), view=SystemView())
 
 
 @bot.command(name="comandos")
@@ -3551,6 +3637,10 @@ async def commands_list(ctx):
 async def help_f1(ctx):
     embed = discord.Embed(title="📘 Guia de corrida — F1 Discord Racing", color=discord.Color.green())
     embed.description = (
+        "**Comece por aqui**\n"
+        "• Use `!f1` para corrida casual ou `!f1rank` para etapa oficial (precisa de temporada ativa). Entre no lobby, configure os 10 pontos, escolha pneus e marque Estou pronto.\n"
+        "• O host inicia a classificação e depois a corrida. Em cada trecho, escolha um botão; se o tempo acabar, o bot seleciona Seguro automaticamente.\n"
+        "• Consulte `!sistema` para ver a explicação de cada botão, Pit Stop, Safety Car, pneus e atributos.\n\n"
         "**1) Escolha o tipo de corrida**\n"
         "• `!f1`: corrida casual, até **10 pilotos**, não soma pontos no campeonato. Seus resultados entram no `!rankingnormal`.\n"
         "• `!f1rank`: corrida oficial, até **10 pilotos**, disponível quando existe uma temporada ativa. Os resultados pontuam no `!ranking` e em `!campeonato`.\n"
@@ -3578,9 +3668,10 @@ async def help_f1(ctx):
         "**5) CARRO, PNEUS E CLIMA**\n"
         "• Gerenciamento de pneus reduz desgaste; Curvas melhora trechos técnicos; Velocidade favorece retas e ultrapassagens; Classificação melhora o grid; Motor ajuda na aceleração; Controle melhora disputas e reduz erros. Os pontos e bônus do estilo agora têm efeito mais perceptível.\n"
         "• Soft é rápido e desgasta mais; Medium equilibra; Hard dura mais; Intermediate é indicado para pista úmida; Wet é indicado para chuva forte. Pneus inadequados provocam perda de ritmo, desgaste e risco adicionais.\n"
-        "• Cada piloto tem 2 jogos de pneus no total: o jogo inicial e uma troca durante a corrida. O botão Pit Stop abre um menu separado para escolher o composto, evitando cliques acidentais.\n"
-        "• Safety Car é raro e reservado a acidentes graves ou abandonos. Acidentes leves/moderados não provocam neutralização; em provas de até 5 voltas a chance é ainda menor. Quando acionado, pula o restante da volta e retoma no mesmo trecho da seguinte.\n"
-        "• O desgaste reduz a aderência. Energia pode ser recuperada um pouco com Normal e Seguro. Pit stops reparam parte do dano e acrescentam tempo à parada.\n"
+        "• Cada piloto tem 2 jogos de pneus no total: o jogo inicial e uma troca. O Pit Stop abre um menu privado para escolher o composto. Uma parada normal custa cerca de 18s + equipe; parar cedo demais pode fazer você perder posições.\n"
+        "• O desgaste agora afeta o tempo de cada trecho de forma progressiva. Gerenciamento de pneus reduz o desgaste; Soft desgasta mais e Hard dura mais. Planeje a única troca em corridas longas.\n"
+        "• Safety Car é raro e reservado a acidentes graves ou abandonos. Durante a janela ativa, o botão **Pit Stop (Safety Car)** permite parar por cerca de 6s + equipe, contra 18s + equipe em ritmo normal. A vantagem termina quando a janela acaba.\n"
+        "• Energia recupera um pouco com Normal e Seguro. Pit stops também reparam parte do dano do carro.\n"
         "• Erros, derrapagens, acidentes e mudanças de clima são probabilísticos. A transmissão informa ultrapassagens, incidentes e acontecimentos importantes.\n\n"
         "**6) PONTUAÇÃO E RANKINGS**\n"
         "• Corridas casuais (`!f1`): ranking separado, com pontos e partidas jogadas. A pontuação é 10, 8, 6, 5, 4, 3, 2 e 1 para as oito primeiras posições. Consulte `!rankingnormal`.\n"
