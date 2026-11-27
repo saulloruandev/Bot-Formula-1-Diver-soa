@@ -1244,7 +1244,8 @@ def lobby_embed(race: Race, title=None, description=None):
     )
     embed.add_field(name="👥 Lobby", value=f"**Pilotos:** {len(race.drivers)}/{race.max_players}\n**Mínimo:** {MIN_PLAYERS}", inline=True)
     if race.drivers:
-        rows = []
+        # Um field por piloto evita ultrapassar o limite de 1.024 caracteres
+        # quando o lobby recebe vários jogadores, nomes longos ou estilos.
         for pos, driver in enumerate(race.drivers.values(), 1):
             tire_label = TIRES[driver.tire]["label"] if driver.tire else "Não escolhido"
             badge_bits = []
@@ -1255,8 +1256,20 @@ def lobby_embed(race: Race, title=None, description=None):
             if driver.favorite_tire:
                 badge_bits.append(f"⭐ Favorito: {TIRES.get(driver.favorite_tire, {}).get('label', driver.favorite_tire)}")
             badge_line = ("\n└ " + " • ".join(badge_bits)) if badge_bits else ""
-            rows.append(f"**P{pos}** {driver.user.mention} (**{driver_display_name(driver)}**) — {driver.lobby_status}\n└ Pneus da corrida: {tire_label} • Pontos: {driver.total_skills}/{SKILL_POINTS}{badge_line}")
-        embed.add_field(name="🏎️ Pilotos e posições provisórias", value="\n".join(rows), inline=False)
+            driver_line = (
+                f"{driver.user.mention} (**{driver_display_name(driver)}**) — {driver.lobby_status}\n"
+                f"└ Pneus da corrida: {tire_label} • Pontos: {driver.total_skills}/{SKILL_POINTS}"
+                f"{badge_line}"
+            )
+            # O conteúdo individual é limitado preventivamente, mesmo se o
+            # jogador usar um nome de perfil muito comprido.
+            if len(driver_line) > 1000:
+                driver_line = driver_line[:997] + "..."
+            embed.add_field(
+                name=f"🏎️ P{pos} — {driver_display_name(driver)[:220]}",
+                value=driver_line or "Piloto inscrito.",
+                inline=False,
+            )
     else:
         embed.add_field(name="🏎️ Pilotos", value="Ninguém entrou ainda.", inline=False)
     embed.set_image(url="attachment://circuit-preview.png")
@@ -1264,10 +1277,24 @@ def lobby_embed(race: Race, title=None, description=None):
     return embed
 
 
-async def refresh_lobby(race, view):
-    if race.message:
-        preview = build_circuit_preview_file(race)
-        await race.message.edit(embed=lobby_embed(race), attachments=[preview], view=view)
+async def refresh_lobby(race, view=None):
+    """Atualiza sempre o embed completo e a view atual do lobby."""
+    if not race.message:
+        return
+    if view is None:
+        view = LobbyView(race)
+    preview = build_circuit_preview_file(race)
+    try:
+        await race.message.edit(
+            embed=lobby_embed(race),
+            attachments=[preview],
+            view=view,
+        )
+    except discord.HTTPException:
+        # Não deixa falha de atualização derrubar o callback; registra para
+        # diagnóstico e permite que o próximo evento tente atualizar de novo.
+        logger.exception("Falha ao atualizar embed do lobby %s", race.race_id)
+        raise
 
 
 class SkillSelect(discord.ui.Select):
