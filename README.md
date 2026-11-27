@@ -11,6 +11,7 @@ F1_Discord_Racing/
 │   ├── bot.py
 │   ├── profiles.json
 │   └── assets/
+│       ├── circuitos/
 │       └── eventos/
 ├── .env
 ├── .env.example
@@ -26,6 +27,7 @@ F1_Discord_Racing/
 - `app/campeonato.json`: histórico e pontuação das temporadas oficiais (criado automaticamente).
 - `app/ranking_normal.json`: pontuação e partidas das corridas casuais (criado automaticamente; ignorado pelo Git).
 - `app/assets/eventos/`: imagens opcionais para eventos importantes.
+- `app/assets/circuitos/`: mapas esquemáticos usados como prévia do circuito no lobby.
 - `.env`: token do Discord. Nunca envie esse arquivo ao GitHub.
 
 ## Como executar
@@ -47,7 +49,7 @@ Cada jogador possui somente um estilo ativo: ao aceitar um novo resultado, o est
 O bot mantém dois modos independentes:
 
 - **Corrida casual — `!f1`:** lobby com até 10 pilotos. Pode haver vários lobbies simultâneos, inclusive no mesmo canal. Os resultados não alteram o campeonato; somam pontos e partidas no ranking normal (`!rankingnormal`). A pontuação casual é 10, 8, 6, 5, 4, 3, 2 e 1 ponto para as oito primeiras posições; as demais não pontuam. Todos os participantes têm a partida contabilizada.
-- **Corrida oficial — `!f1rank`:** lobby com até 5 pilotos. Exige uma temporada ativa e registra resultados no campeonato (`!ranking` e `!campeonato`). Pontuação oficial: 1º = 10, 2º = 7, 3º = 5, 4º = 3, 5º = 1. A volta mais rápida vale +1 ponto somente para quem terminar no top 3. Abandonos e corridas canceladas não pontuam.
+- **Corrida oficial — `!f1rank`:** lobby com até 10 pilotos. Exige uma temporada ativa e registra resultados no campeonato (`!ranking` e `!campeonato`). Pontuação oficial: 1º = 10, 2º = 7, 3º = 5, 4º = 3, 5º = 1. A volta mais rápida vale +1 ponto somente para quem terminar no top 3. Abandonos e corridas canceladas não pontuam.
 
 Cada lobby tem painel e identificador próprios. Se a classificação e a corrida não forem iniciadas em até 10 minutos, o lobby é encerrado automaticamente. O criador pode cancelar a própria corrida com `!f1cancel`; administradores podem cancelar a corrida de alguém usando `!f1cancel @criador`. Use `!f1status [@criador]` para consultar o estado dos lobbies no canal.
 
@@ -57,7 +59,7 @@ Inicie uma temporada oficial com `!iniciartemporada Nome`. Ao terminar uma corri
 
 ## Transmissão, pneus e pódio
 
-A transmissão separa o painel de corrida do rádio de acontecimentos. Ultrapassagens registram quem passou quem, em qual volta e trecho; eventos importantes são publicados abaixo do painel mais recente. No lobby, **Configurar carro** abre uma tela interativa com os seis atributos identificados, os pontos atuais e um seletor para alterar cada valor. Pit stops têm 18 segundos de tempo-base e uma perda adicional variável da equipe. Pneus inadequados para o clima causam perda de ritmo, desgaste e risco de incidente maiores. Ao final, o bot monta uma arte de pódio com fotos maiores, nome e tempo final de cada piloto (ou o avatar do Discord como alternativa).
+A transmissão separa o painel de corrida do rádio de acontecimentos. Ultrapassagens registram quem passou quem, em qual volta e trecho; eventos importantes são publicados abaixo do painel mais recente. No lobby, **Configurar carro** abre uma tela interativa com os seis atributos identificados, os pontos atuais e um seletor para alterar cada valor. Cada piloto começa com um jogo de pneus e pode usar apenas mais um jogo durante a corrida (2 jogos no total). O lobby mostra uma prévia esquemática do circuito escolhido; os mapas são ilustrativos, não desenhos oficiais em escala. Pit stops normais têm 18 segundos de tempo-base; durante o Safety Car, a perda-base cai para 6 segundos, além da perda adicional variável da equipe. O Safety Car neutraliza o restante da volta do incidente e mais uma volta completa para permitir a limpeza da pista. O criador pode adicionar bots pelo botão **Adicionar bots**; cada bot recebe nome de piloto, estilo aleatório, atributos e decisões automáticas. Corridas com menos de 3 humanos ou com bots em maioria não entram nos rankings; os bots nunca recebem pontos. Pneus inadequados para o clima causam perda de ritmo, desgaste e risco de incidente maiores. Ao final, o bot monta uma arte de pódio com fotos, nomes e tempos em tamanho ampliado, além de exibir a volta mais rápida válida e o número da volta em que ocorreu.
 
 ## Imagens dos eventos
 
