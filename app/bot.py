@@ -1242,7 +1242,7 @@ def lobby_embed(race: Race, title=None, description=None):
         value=f"**Clima:** {race.weather_name}\n**Ambiente:** {race.ambient_temp}°C\n**Pista:** {race.track_temp}°C ({race.surface})",
         inline=True,
     )
-    embed.add_field(name="👥 Lobby", value=f"**Pilotos:** {len(race.drivers)}/{race.max_players}\n**Mínimo:** {MIN_PLAYERS}", inline=True)
+    ready_count = sum(1 for driver in race.drivers.values() if driver.ready and not getattr(driver, "is_bot", False))\n    embed.add_field(name="👥 Lobby", value=f"**Pilotos:** {len(race.drivers)}/{race.max_players}\n**Prontos:** {ready_count}\n**Mínimo:** {MIN_PLAYERS}", inline=True)
     if race.drivers:
         # Um field por piloto evita ultrapassar o limite de 1.024 caracteres
         # quando o lobby recebe vários jogadores, nomes longos ou estilos.
@@ -1284,17 +1284,11 @@ async def refresh_lobby(race, view=None):
     if view is None:
         view = LobbyView(race)
     preview = build_circuit_preview_file(race)
-    try:
-        await race.message.edit(
-            embed=lobby_embed(race),
-            attachments=[preview],
-            view=view,
-        )
-    except discord.HTTPException:
-        # Não deixa falha de atualização derrubar o callback; registra para
-        # diagnóstico e permite que o próximo evento tente atualizar de novo.
-        logger.exception("Falha ao atualizar embed do lobby %s", race.race_id)
-        raise
+    await race.message.edit(
+        embed=lobby_embed(race),
+        attachments=[preview],
+        view=view,
+    )
 
 
 class SkillSelect(discord.ui.Select):
