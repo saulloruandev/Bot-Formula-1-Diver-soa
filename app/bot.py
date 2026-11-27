@@ -193,7 +193,7 @@ class Driver:
     pit_stops: int = 0
     last_pit_lap: int = 0
     tire_warning_lap: int = 0
-    tire_changes_remaining: int = 2
+    tire_changes_remaining: int = 1
     is_bot: bool = False
 
     def effective_skill(self, attribute):
@@ -1215,7 +1215,7 @@ def lobby_embed(race: Race, title=None, description=None):
     circuit_slug = CIRCUIT_IMAGE_SLUGS.get(race.circuit_name)
     if circuit_slug:
         embed.set_image(url=f"https://raw.githubusercontent.com/saulloruandev/Bot-Formula-1-Diver-soa/main/app/assets/circuitos/{circuit_slug}.svg")
-    embed.set_footer(text=f"{'Oficial • pontua na temporada' if race.mode == 'ranked' else 'Casual • ranking normal'} | Distribua 10 pontos, escolha pneus e marque Estou pronto.")
+    embed.set_footer(text=f"{'Oficial • pontua na temporada' if race.mode == 'ranked' else 'Casual • ranking normal'} | 15 circuitos • até 10 pilotos • bots opcionais")
     return embed
 
 
@@ -1612,7 +1612,7 @@ class RaceDecisionView(discord.ui.View):
                     if driver is None or driver.finished or driver.retired:
                         return await interaction.response.send_message("Você não é um piloto ativo nesta corrida.", ephemeral=True)
                     if driver.tire_changes_remaining <= 0:
-                        return await interaction.response.send_message("Você já usou suas 2 trocas de pneus disponíveis.", ephemeral=True)
+                        return await interaction.response.send_message("Você já utilizou os 2 jogos de pneus disponíveis (jogo inicial + 1 troca).", ephemeral=True)
                     if driver.last_pit_lap == race.current_lap:
                         return await interaction.response.send_message("Você já fez um pit stop nesta volta.", ephemeral=True)
                     await interaction.response.send_message("Safety Car: escolha o composto para a troca:", view=PitTireView(self, interaction.user.id), ephemeral=True)
@@ -1632,7 +1632,7 @@ class RaceDecisionView(discord.ui.View):
                 if driver.last_pit_lap == race.current_lap:
                     return await interaction.response.send_message("Você já fez um pit stop nesta volta.", ephemeral=True)
                 if driver.tire_changes_remaining <= 0:
-                    return await interaction.response.send_message("Você já usou suas 2 trocas de pneus disponíveis.", ephemeral=True)
+                    return await interaction.response.send_message("Você já utilizou os 2 jogos de pneus disponíveis (jogo inicial + 1 troca).", ephemeral=True)
                 await interaction.response.send_message("Safety Car ativo: pit stop com perda reduzida. Escolha o composto:" if race.safety_car_laps > 0 else "Escolha o pneu que deseja colocar:", view=PitTireView(self, interaction.user.id), ephemeral=True)
             pit_button.callback = open_pit_menu
             self.add_item(pit_button)
@@ -1663,7 +1663,7 @@ class RaceDecisionView(discord.ui.View):
         if pit and race.current_segment_type != "reta" and race.safety_car_laps <= 0:
             return await interaction.response.send_message("Pit stop fora de uma reta só é permitido durante o Safety Car.", ephemeral=True)
         if pit and driver.tire_changes_remaining <= 0:
-            return await interaction.response.send_message("Você já usou suas 2 trocas de pneus disponíveis.", ephemeral=True)
+            return await interaction.response.send_message("Você já utilizou os 2 jogos de pneus disponíveis (jogo inicial + 1 troca).", ephemeral=True)
         if pit and driver.last_pit_lap == race.current_lap:
             return await interaction.response.send_message("Você já fez um pit stop nesta volta.", ephemeral=True)
         async with race.decision_lock:
@@ -1724,7 +1724,7 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
         sc_label = " durante o Safety Car" if race.safety_car_laps > 0 else ""
         event = (f"🛠️ PIT STOP{sc_label}: {driver_display_name(driver)} trocou "
                  f"{TIRES[old_tire]['label'] if old_tire in TIRES else 'pneus'} por {TIRES[chosen_tire]['label']}. "
-                 f"Parada: {base_pit_loss:.0f}s + {crew_loss:.1f}s de perda adicional. Restam {driver.tire_changes_remaining} trocas.")
+                 f"Parada: {base_pit_loss:.0f}s + {crew_loss:.1f}s de perda adicional. Restam {driver.tire_changes_remaining} trocas de jogo.")
     if driver.ability == "Largada Explosiva" and race.current_lap == 1:
         skill_bonus += base * 0.006
     if driver.ability == "Última Volta" and race.current_lap == race.total_laps:
