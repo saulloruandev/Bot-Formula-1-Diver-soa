@@ -2503,13 +2503,15 @@ async def run_race(race):
                     await race.message.edit(embed=panel_embed, view=ClosedView())
                 await flush_race_broadcasts(race)
                 break
-        for driver in race.drivers.values():
-            if not driver.finished and not driver.retired:
-                driver.last_lap_time = driver.total_time - lap_start_times.get(driver.user.id, driver.total_time)
-                minimum_valid_lap = circuit["base_lap"] * 0.55
-                if minimum_valid_lap <= driver.last_lap_time < (driver.best_lap_time or float("inf")):
-                    driver.best_lap_time = driver.last_lap_time
-                    driver.best_lap_number = lap
+        # A volta interrompida pelo Safety Car não conta como volta rápida.
+        if not safety_car_triggered_this_lap:
+            for driver in race.drivers.values():
+                if not driver.finished and not driver.retired:
+                    driver.last_lap_time = driver.total_time - lap_start_times.get(driver.user.id, driver.total_time)
+                    minimum_valid_lap = circuit["base_lap"] * 0.55
+                    if minimum_valid_lap <= driver.last_lap_time < (driver.best_lap_time or float("inf")):
+                        driver.best_lap_time = driver.last_lap_time
+                        driver.best_lap_number = lap
         if race.safety_car_laps > 0 and not safety_car_triggered_this_lap:
             race.safety_car_laps = 0
             resume_segment_index = 1
