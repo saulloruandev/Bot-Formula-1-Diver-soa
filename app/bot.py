@@ -1958,9 +1958,11 @@ class RemoveDriverSelect(discord.ui.Select):
 
 
 class AddBotsModal(discord.ui.Modal, title="Adicionar pilotos controlados pelo bot"):
-    amount = discord.ui.TextInput(label="Quantidade de bots para adicionar", placeholder="Ex.: 3", min_length=1, max_length=2)
     def __init__(self, race):
-        super().__init__(); self.race = race
+        super().__init__()
+        self.race = race
+        self.amount = discord.ui.TextInput(label="Quantidade de bots para adicionar", placeholder="Ex.: 3", min_length=1, max_length=2)
+        self.add_item(self.amount)
     async def on_submit(self, interaction):
         if interaction.user.id != self.race.host_id or not race_is_active(self.race) or self.race.started:
             return await interaction.response.send_message("Somente o criador pode alterar este lobby antes da classificação.", ephemeral=True)
