@@ -19,7 +19,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 MIN_PLAYERS = 2
-MAX_PLAYERS = 5
+MAX_PLAYERS = 10
 TOTAL_LAPS = 10
 SKILL_POINTS = 10
 OVERTAKE_DETECTION_SECONDS = 1.0  # Ajuste para 1.5 para uma corrida mais casual
@@ -1141,7 +1141,7 @@ def weather_tire_penalty(tire_key: str, rain_level: float) -> float:
     return max(-0.15, (1.0 - multiplier) * 1.35)
 
 
-def lobby_embed(race: Race, title="🏁 F1 Discord Racing — Lobby", description=None):
+def lobby_embed(race: Race, title=None, description=None):
     circuit = CIRCUITS[race.circuit_name]
     embed = discord.Embed(
         title=title or ("🏆 F1 Rank — Lobby oficial" if race.mode == "ranked" else "🏁 F1 Casual — Lobby"),
@@ -1451,6 +1451,8 @@ class LobbyView(discord.ui.View):
     async def start_qualifying_button(self, interaction, button):
         if interaction.user.id != self.race.host_id:
             return await interaction.response.send_message("Somente o host pode iniciar a classificação.", ephemeral=True)
+        if not self.active(interaction):
+            return await interaction.response.send_message("Este lobby não está mais ativo.", ephemeral=True)
         ok, message = await start_qualifying(self.race)
         if not ok:
             return await interaction.response.send_message(f"⚠️ {message}", ephemeral=True)
@@ -3275,7 +3277,7 @@ async def help_f1(ctx):
         "• O desgaste reduz a aderência. Energia pode ser recuperada um pouco com Normal e Seguro. Pit stops trocam pneus, reparam parte do dano e acrescentam tempo à parada.\n"
         "• Erros, derrapagens, acidentes e mudanças de clima são probabilísticos. A transmissão informa ultrapassagens, incidentes e acontecimentos importantes.\n\n"
         "**6) PONTUAÇÃO E RANKINGS**\n"
-        "• Corridas casuais (`!f1`): ranking separado, com pontos e partidas jogadas. Consulte `!rankingnormal`.\n"
+        "• Corridas casuais (`!f1`): ranking separado, com pontos e partidas jogadas. A pontuação é 10, 8, 6, 5, 4, 3, 2 e 1 para as oito primeiras posições. Consulte `!rankingnormal`.\n"
         "• Corridas oficiais (`!f1rank`): 1º = 10, 2º = 7, 3º = 5, 4º = 3, 5º = 1; +1 pela volta mais rápida se terminar no top 3. Abandono não pontua.\n"
         "• Use `!ranking`, `!campeonato`, `!temporada`, `!resultado` e `!estatisticas` para consultar a temporada.\n\n"
         "**7) PERFIL E HABILIDADES**\n"
