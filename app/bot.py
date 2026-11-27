@@ -1242,7 +1242,8 @@ def lobby_embed(race: Race, title=None, description=None):
         value=f"**Clima:** {race.weather_name}\n**Ambiente:** {race.ambient_temp}°C\n**Pista:** {race.track_temp}°C ({race.surface})",
         inline=True,
     )
-    ready_count = sum(1 for driver in race.drivers.values() if driver.ready and not getattr(driver, "is_bot", False))\n    embed.add_field(name="👥 Lobby", value=f"**Pilotos:** {len(race.drivers)}/{race.max_players}\n**Prontos:** {ready_count}\n**Mínimo:** {MIN_PLAYERS}", inline=True)
+    ready_count = sum(1 for driver in race.drivers.values() if driver.ready and not getattr(driver, "is_bot", False))
+    embed.add_field(name="👥 Lobby", value=f"**Pilotos:** {len(race.drivers)}/{race.max_players}\n**Prontos:** {ready_count}\n**Mínimo:** {MIN_PLAYERS}", inline=True)
     if race.drivers:
         # Um field por piloto evita ultrapassar o limite de 1.024 caracteres
         # quando o lobby recebe vários jogadores, nomes longos ou estilos.
