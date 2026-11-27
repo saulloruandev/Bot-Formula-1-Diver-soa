@@ -210,17 +210,21 @@ class Race:
     safety_car_laps: int = 0
     early_finish: bool = False
     pending_broadcasts: List[str] = field(default_factory=list)
+    race_id: str = field(default_factory=lambda: str(__import__("uuid").uuid4()))
+    mode: str = "casual"
+    max_players: int = 10
+    lobby_timeout_task: Optional[asyncio.Task] = None
 
     @property
     def full(self):
-        return len(self.drivers) >= MAX_PLAYERS
+        return len(self.drivers) >= self.max_players
 
     @property
     def all_ready(self):
         return len(self.drivers) >= MIN_PLAYERS and all(d.ready for d in self.drivers.values())
 
 
-races: Dict[int, Race] = {}
+races: Dict[str, Race] = {}
 
 # Dados mutáveis dos jogadores ficam fora do controle de versão.
 # O arquivo permanece em app/profiles.json na instalação local, mas é ignorado pelo Git.
@@ -1097,8 +1101,19 @@ def driver_display_name(driver: Driver):
     return driver.race_name or driver.user.display_name
 
 
-def race_for_channel(channel_id: int):
-    return races.get(channel_id)
+def races_for_channel(channel_id: int):
+    return [race for race in races.values() if race.channel_id == channel_id]
+
+def race_for_channel(channel_id: int, mode=None, host_id=None):
+    matches = races_for_channel(channel_id)
+    if mode is not None:
+        matches = [race for race in matches if race.mode == mode]
+    if host_id is not None:
+        matches = [race for race in matches if race.host_id == host_id]
+    return matches[-1] if matches else None
+
+def race_is_active(race: Race):
+    return races.get(race.race_id) is race
 
 
 def format_time(seconds: Optional[float]) -> str:
@@ -1129,16 +1144,19 @@ def weather_tire_penalty(tire_key: str, rain_level: float) -> float:
 def lobby_embed(race: Race, title="🏁 F1 Discord Racing — Lobby", description=None):
     circuit = CIRCUITS[race.circuit_name]
     embed = discord.Embed(
-        title=title,
-        description=description or f"**{race.circuit_name}** • {race.total_laps} voltas\nCircuito com retas e curvas.",
-        color=discord.Color.red(),
+        title=title or ("🏆 F1 Rank — Lobby oficial" if race.mode == "ranked" else "🏁 F1 Casual — Lobby"),
+        description=description or (
+            f"**{race.circuit_name}** • {race.total_laps} voltas\n"
+            + ("Corrida oficial da temporada." if race.mode == "ranked" else "Corrida casual — não altera o campeonato.")
+        ),
+        color=discord.Color.gold() if race.mode == "ranked" else discord.Color.red(),
     )
     embed.add_field(
         name="🌦️ Condições",
         value=f"**Clima:** {race.weather_name}\n**Ambiente:** {race.ambient_temp}°C\n**Pista:** {race.track_temp}°C ({race.surface})",
         inline=True,
     )
-    embed.add_field(name="👥 Lobby", value=f"**Pilotos:** {len(race.drivers)}/{MAX_PLAYERS}\n**Mínimo:** {MIN_PLAYERS}", inline=True)
+    embed.add_field(name="👥 Lobby", value=f"**Pilotos:** {len(race.drivers)}/{race.max_players}\n**Mínimo:** {MIN_PLAYERS}", inline=True)
     if race.drivers:
         rows = []
         for pos, driver in enumerate(race.drivers.values(), 1):
@@ -1153,7 +1171,7 @@ def lobby_embed(race: Race, title="🏁 F1 Discord Racing — Lobby", descriptio
         embed.add_field(name="🏎️ Pilotos e posições provisórias", value="\n".join(rows), inline=False)
     else:
         embed.add_field(name="🏎️ Pilotos", value="Ninguém entrou ainda.", inline=False)
-    embed.set_footer(text="Distribua 10 pontos (ajustáveis no lobby), escolha pneus e marque Estou pronto.")
+    embed.set_footer(text=f"{'Oficial • pontua na temporada' if race.mode == 'ranked' else 'Casual • ranking normal'} | Distribua 10 pontos, escolha pneus e marque Estou pronto.")
     return embed
 
 
@@ -1174,8 +1192,8 @@ class SkillSelect(discord.ui.Select):
     async def callback(self, interaction):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("Esse menu pertence a outro piloto.", ephemeral=True)
-        race = race_for_channel(interaction.channel_id)
-        if not race or race.started or self.user_id not in race.drivers:
+        race = self.race
+        if not race_is_active(race) or race.started or self.user_id not in race.drivers:
             return await interaction.response.send_message("Lobby indisponível.", ephemeral=True)
         driver = race.drivers[self.user_id]
         new_value = int(self.values[0])
@@ -1207,8 +1225,8 @@ class TireSelect(discord.ui.Select):
     async def callback(self, interaction):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("Esse menu pertence a outro piloto.", ephemeral=True)
-        race = race_for_channel(interaction.channel_id)
-        if not race or race.started or self.user_id not in race.drivers:
+        race = self.race
+        if not race_is_active(race) or race.started or self.user_id not in race.drivers:
             return await interaction.response.send_message("Lobby indisponível.", ephemeral=True)
         driver = race.drivers[self.user_id]
         driver.tire = self.values[0]
@@ -1267,7 +1285,7 @@ class CarAttributeSelect(discord.ui.Select):
         view = self.setup_view
         if interaction.user.id != view.user_id:
             return await interaction.response.send_message("Essa configuração pertence a outro piloto.", ephemeral=True)
-        if race_for_channel(interaction.channel_id) is not view.race or view.race.started:
+        if interaction.channel_id != view.race.channel_id or not race_is_active(view.race) or view.race.started:
             return await interaction.response.send_message("O lobby não está mais disponível.", ephemeral=True)
         driver = view.race.drivers.get(view.user_id)
         if driver is None:
@@ -1303,7 +1321,7 @@ class CarPointsSelect(discord.ui.Select):
         view = self.setup_view
         if interaction.user.id != view.user_id:
             return await interaction.response.send_message("Essa configuração pertence a outro piloto.", ephemeral=True)
-        if race_for_channel(interaction.channel_id) is not view.race or view.race.started:
+        if interaction.channel_id != view.race.channel_id or not race_is_active(view.race) or view.race.started:
             return await interaction.response.send_message("O lobby não está mais disponível.", ephemeral=True)
         if not view.selected_attribute:
             return await interaction.response.send_message("Escolha primeiro o atributo que deseja configurar.", ephemeral=True)
@@ -1359,8 +1377,7 @@ class LobbyView(discord.ui.View):
         self.race = race
 
     def active(self, interaction):
-        current = race_for_channel(interaction.channel_id)
-        return current is self.race and not current.started
+        return interaction.channel_id == self.race.channel_id and race_is_active(self.race) and not self.race.started
 
     @discord.ui.button(label="Entrar na corrida", emoji="🏎️", style=discord.ButtonStyle.success, row=0)
     async def join(self, interaction, button):
@@ -1370,7 +1387,7 @@ class LobbyView(discord.ui.View):
             if interaction.user.id in self.race.drivers:
                 return await interaction.response.send_message("Você já está inscrito.", ephemeral=True)
             if self.race.full:
-                return await interaction.response.send_message(f"Lobby cheio ({MAX_PLAYERS} pilotos).", ephemeral=True)
+                return await interaction.response.send_message(f"Lobby cheio ({self.race.max_players} pilotos).", ephemeral=True)
             profile = gacha_profile(interaction.user.id)
             saved_skills = profile.get("skills", PROFILE_PRESETS["balanced"]["skills"])
             equipped = profile.get("equipped_style")
@@ -1538,9 +1555,9 @@ class RaceDecisionView(discord.ui.View):
         self.add_item(button)
 
     async def record_choice(self, interaction, mode, attack=False, boost=False, line=None, pit=False, pit_tire=None):
-        race = race_for_channel(interaction.channel_id)
-        driver = race.drivers.get(interaction.user.id) if race else None
-        if race is not self.race or not race.race_started or driver is None or driver.finished or driver.retired:
+        race = self.race
+        driver = race.drivers.get(interaction.user.id) if race_is_active(race) else None
+        if interaction.channel_id != race.channel_id or not race.race_started or driver is None or driver.finished or driver.retired:
             return await interaction.response.send_message("Você não é um piloto ativo nesta corrida.", ephemeral=True)
         active = sorted([d for d in race.drivers.values() if not d.finished and not d.retired], key=lambda d: d.total_time)
         index = active.index(driver) if driver in active else 0
@@ -1801,8 +1818,8 @@ class QualifyingView(discord.ui.View):
 
     @discord.ui.button(label="Iniciar corrida", emoji="🚦", style=discord.ButtonStyle.success)
     async def begin_race(self, interaction, button):
-        race = race_for_channel(interaction.channel_id)
-        if race is not self.race or interaction.user.id != race.host_id:
+        race = self.race
+        if interaction.channel_id != race.channel_id or not race_is_active(race) or interaction.user.id != race.host_id:
             return await interaction.response.send_message("Somente o host desta corrida pode iniciar.", ephemeral=True)
         if not race.qualifying_done or race.race_started:
             return await interaction.response.send_message("A corrida ainda não está pronta para começar.", ephemeral=True)
@@ -1826,7 +1843,7 @@ class LobbyConfigSelect(discord.ui.Select):
         super().__init__(options=options, placeholder=placeholder, min_values=1, max_values=1)
 
     async def host_check(self, interaction):
-        if race_for_channel(interaction.channel_id) is not self.race:
+        if interaction.channel_id != self.race.channel_id or not race_is_active(self.race):
             await interaction.response.send_message("Lobby indisponível.", ephemeral=True)
             return False
         if interaction.user.id != self.race.host_id or self.race.started:
@@ -2086,6 +2103,8 @@ async def build_podium_file(order):
 
 async def run_race(race):
     race.race_started = True
+    if race.lobby_timeout_task and not race.lobby_timeout_task.done():
+        race.lobby_timeout_task.cancel()
     grid = sorted(race.drivers.values(), key=lambda d: d.grid_position or 99)
     for rank, driver in enumerate(grid):
         driver.total_time = rank * 0.25
@@ -2255,7 +2274,9 @@ async def run_race(race):
         else:
             await race.channel.send(embed=embed)
     await flush_race_broadcasts(race)
-    races.pop(race.channel_id, None)
+    if race.lobby_timeout_task and not race.lobby_timeout_task.done():
+        race.lobby_timeout_task.cancel()
+    races.pop(race.race_id, None)
 
 
 
@@ -2898,10 +2919,12 @@ def season_for(guild_id):
     return CHAMPIONSHIP.get("seasons", {}).get(season_id) if season_id else None
 
 async def register_championship_result(race, order, fastest):
+    if race.mode != "ranked":
+        return
     season = season_for(race.guild_id)
     if not season:
         return
-    race_id = f"{race.guild_id}-{int(__import__('time').time())}-{race.channel_id}"
+    race_id = race.race_id
     if any(item.get("race_id") == race_id for item in season.get("races", [])):
         return
     results = []
