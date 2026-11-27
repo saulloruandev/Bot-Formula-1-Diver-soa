@@ -48,7 +48,7 @@ Cada jogador possui somente um estilo ativo: ao aceitar um novo resultado, o est
 
 O bot mantém dois modos independentes:
 
-- **Corrida casual — `!f1`:** lobby com até 10 pilotos. Pode haver vários lobbies simultâneos, inclusive no mesmo canal. Os resultados não alteram o campeonato; somam pontos e partidas no ranking normal (`!rankingnormal`). A pontuação casual é 10, 8, 6, 5, 4, 3, 2 e 1 ponto para as oito primeiras posições; as demais não pontuam. Todos os participantes têm a partida contabilizada.
+- **Corrida casual — `!f1`:** lobby com até 10 pilotos. Pode haver vários lobbies simultâneos, inclusive no mesmo canal. Os resultados não alteram o campeonato; somam pontos e partidas no ranking normal (`!rankingnormal`). A pontuação casual é 10, 8, 6, 5, 4, 3, 2 e 1 ponto para as oito primeiras posições; as demais não pontuam. Só entram no ranking corridas com pelo menos 3 humanos e humanos em maioria; partidas que não atendem a essa regra não somam pontos nem partidas.
 - **Corrida oficial — `!f1rank`:** lobby com até 10 pilotos. Exige uma temporada ativa e registra resultados no campeonato (`!ranking` e `!campeonato`). Pontuação oficial: 1º = 10, 2º = 7, 3º = 5, 4º = 3, 5º = 1. A volta mais rápida vale +1 ponto somente para quem terminar no top 3. Abandonos e corridas canceladas não pontuam.
 
 Cada lobby tem painel e identificador próprios. Se a classificação e a corrida não forem iniciadas em até 10 minutos, o lobby é encerrado automaticamente. O criador pode cancelar a própria corrida com `!f1cancel`; administradores podem cancelar a corrida de alguém usando `!f1cancel @criador`. Use `!f1status [@criador]` para consultar o estado dos lobbies no canal.
