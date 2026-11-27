@@ -1203,6 +1203,8 @@ def lobby_embed(race: Race, title=None, description=None):
             badge_bits = []
             if driver.team_name:
                 badge_bits.append(f"🏢 {driver.team_name}")
+            if driver.style_name:
+                badge_bits.append(f"🎴 {driver.style_name}")
             if driver.favorite_tire:
                 badge_bits.append(f"⭐ Favorito: {TIRES.get(driver.favorite_tire, {}).get('label', driver.favorite_tire)}")
             badge_line = ("\n└ " + " • ".join(badge_bits)) if badge_bits else ""
@@ -1987,7 +1989,7 @@ def create_bot_driver(race, bot_id):
     return Driver(user=fake_user, race_name=name, team_name=random.choice(("Ferrari", "Mercedes", "McLaren", "Red Bull", "Aston Martin", "Williams")), tyre_management=skills["tyre_management"], curves=skills["curves"], speed=skills["speed"], qualifying=skills["qualifying"], engine=skills["engine"], control=skills["control"], straights=skills["speed"], braking=skills["qualifying"], acceleration=skills["engine"], ability=random.choice(list(ABILITY_CATALOG)), tire=tire, ready=True, style_name=style["name"], style_tyre_management=int(bonuses.get("tyre_management", 0)), style_curves=int(bonuses.get("curves", 0)), style_straights=int(bonuses.get("straights", 0)), style_braking=int(bonuses.get("braking", 0)), style_acceleration=int(bonuses.get("acceleration", 0)), style_control=int(bonuses.get("control", 0)), is_bot=True)
 
 def bot_race_decision(driver, race, segment, active):
-    if driver.tire_changes_remaining > 0 and driver.last_pit_lap != race.current_lap and (driver.tire_wear >= 62 or (race.safety_car_laps > 0 and driver.tire_wear >= 35)):
+    if driver.tire_changes_remaining > 0 and driver.last_pit_lap != race.current_lap and (segment == "reta" or race.safety_car_laps > 0) and (driver.tire_wear >= 62 or (race.safety_car_laps > 0 and driver.tire_wear >= 35)):
         rain = WEATHER[race.weather_name]["rain"]; tire = "Wet" if rain > 0.65 else "Intermediate" if rain > 0.10 else random.choice(("Medium", "Hard"))
         return {"mode": "normal", "attack": False, "boost": False, "pit": True, "pit_tire": tire}
     if segment == "curva":
@@ -2196,8 +2198,8 @@ async def build_podium_file(order):
     draw = ImageDraw.Draw(canvas)
     try:
         title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
-        name_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 42)
-        time_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 38)
+        name_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+        time_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 44)
         fallback_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 34)
     except OSError:
         title_font = name_font = time_font = fallback_font = ImageFont.load_default()
@@ -3192,6 +3194,10 @@ def season_for(guild_id):
 async def register_championship_result(race, order, fastest):
     if race.mode != "ranked":
         return
+    human_drivers = [driver for driver in order if not getattr(driver, "is_bot", False)]
+    bot_count = len(order) - len(human_drivers)
+    if len(human_drivers) < 3 or bot_count >= len(human_drivers):
+        return
     season = season_for(race.guild_id)
     if not season:
         return
@@ -3200,6 +3206,8 @@ async def register_championship_result(race, order, fastest):
         return
     results = []
     for position, driver in enumerate(order, 1):
+        if getattr(driver, "is_bot", False):
+            continue
         results.append({
             "user_id": str(driver.user.id),
             "name": driver_display_name(driver),
