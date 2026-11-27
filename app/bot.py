@@ -2024,15 +2024,14 @@ async def build_podium_file(order):
 
     draw = ImageDraw.Draw(canvas)
     try:
-        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 46)
-        name_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 25)
-        small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
-        rank_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 34)
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+        name_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
+        time_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 30)
+        fallback_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 34)
     except OSError:
-        title_font = name_font = small_font = rank_font = ImageFont.load_default()
+        title_font = name_font = time_font = fallback_font = ImageFont.load_default()
 
-    draw.text((width // 2, 48), "PÓDIO • F1 DISCORD RACING", font=title_font, fill=(245, 248, 255), anchor="mm")
-    draw.text((width // 2, 103), "RESULTADO OFICIAL DA CORRIDA", font=small_font, fill=(155, 177, 205), anchor="mm")
+    draw.text((width // 2, 58), "PÓDIO", font=title_font, fill=(245, 248, 255), anchor="mm")
 
     layout = {
         1: (455, 300, 290, 275, (242, 190, 65)),
@@ -2060,8 +2059,8 @@ async def build_podium_file(order):
     for position, (driver, photo_data) in enumerate(zip(podium_drivers, photos), 1):
         x, y, box_width, box_height, accent = layout[position]
         center = x + box_width // 2
-        avatar_size = 132
-        avatar_y = y - 160
+        avatar_size = 150
+        avatar_y = y - 175
         draw.ellipse((center - avatar_size // 2 - 7, avatar_y - 7,
                       center + avatar_size // 2 + 7, avatar_y + avatar_size + 7),
                      fill=accent)
@@ -2077,7 +2076,7 @@ async def build_podium_file(order):
             avatar = Image.new("RGB", (avatar_size, avatar_size), (48, 62, 82))
             avatar_draw = ImageDraw.Draw(avatar)
             initials = "".join(part[0] for part in driver_display_name(driver).split()[:2]).upper() or "F1"
-            avatar_draw.text((avatar_size // 2, avatar_size // 2), initials, font=rank_font,
+            avatar_draw.text((avatar_size // 2, avatar_size // 2), initials, font=fallback_font,
                              fill=(255, 255, 255), anchor="mm")
         mask = Image.new("L", (avatar_size, avatar_size), 0)
         ImageDraw.Draw(mask).ellipse((0, 0, avatar_size, avatar_size), fill=255)
@@ -2085,15 +2084,12 @@ async def build_podium_file(order):
 
         draw.rounded_rectangle((x, y, x + box_width, y + box_height), radius=24,
                                fill=(28, 40, 59), outline=accent, width=5)
-        draw.text((center, y + 38), f"P{position}", font=rank_font, fill=accent, anchor="mm")
         name = driver_display_name(driver)
-        if len(name) > 20:
-            name = name[:19] + "…"
-        draw.text((center, y + 92), name, font=name_font, fill=(248, 250, 255), anchor="mm")
-        draw.text((center, y + 135), format_time(driver.total_time), font=small_font,
-                  fill=(184, 199, 219), anchor="mm")
-        draw.text((center, y + 170), TIRES[driver.tire]["label"], font=small_font,
-                  fill=(184, 199, 219), anchor="mm")
+        if len(name) > 21:
+            name = name[:20] + "…"
+        draw.text((center, y + 76), name, font=name_font, fill=(248, 250, 255), anchor="mm")
+        draw.text((center, y + 132), format_time(driver.total_time), font=time_font,
+                  fill=(225, 233, 245), anchor="mm")
 
     output = BytesIO()
     canvas.save(output, format="PNG", optimize=True)
@@ -2284,11 +2280,41 @@ async def run_race(race):
 
 
 class ProfileNameModal(discord.ui.Modal, title="Configurar perfil de piloto"):
-    pilot_name=discord.ui.TextInput(label="Nome exibido",max_length=32,required=True)
-    age=discord.ui.TextInput(label="Idade",placeholder="Ex.: 22",max_length=3,required=False)
-    team_name=discord.ui.TextInput(label="Equipe",max_length=32,required=False)
-    photo_url=discord.ui.TextInput(label="URL da foto do piloto",placeholder="https://...",max_length=300,required=False)
-    def __init__(self,owner_id,source_message_id=None): super().__init__(); self.owner_id=owner_id; self.source_message_id=source_message_id
+    def __init__(self, owner_id, source_message_id=None):
+        super().__init__()
+        self.owner_id = owner_id
+        self.source_message_id = source_message_id
+        profile = gacha_profile(owner_id)
+        self.pilot_name = discord.ui.TextInput(
+            label="Nome exibido",
+            default=str(profile.get("name") or "")[:32],
+            max_length=32,
+            required=True,
+        )
+        self.age = discord.ui.TextInput(
+            label="Idade",
+            placeholder="Ex.: 22",
+            default=str(profile.get("age") or "")[:3],
+            max_length=3,
+            required=False,
+        )
+        self.team_name = discord.ui.TextInput(
+            label="Equipe",
+            default=str(profile.get("team") or "")[:32],
+            max_length=32,
+            required=False,
+        )
+        self.photo_url = discord.ui.TextInput(
+            label="URL da foto do piloto",
+            placeholder="https://...",
+            default=str(profile.get("photo_url") or "")[:300],
+            max_length=300,
+            required=False,
+        )
+        self.add_item(self.pilot_name)
+        self.add_item(self.age)
+        self.add_item(self.team_name)
+        self.add_item(self.photo_url)
     async def on_submit(self,interaction):
         if interaction.user.id!=self.owner_id: return await interaction.response.send_message("Esse formulário não é seu.",ephemeral=True)
         profile=gacha_profile(self.owner_id); profile["name"]=str(self.pilot_name.value).strip() or interaction.user.display_name
