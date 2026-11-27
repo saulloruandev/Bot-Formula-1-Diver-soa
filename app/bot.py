@@ -1582,6 +1582,19 @@ class RaceDecisionView(discord.ui.View):
             self.add_action("Por fora", "🔵", "normal", line="outside", row=0)
             self.add_action("Defender a linha", "🛡️", "defensive", line="defend", row=1)
             self.add_action("Traçado seguro", "🟢", "safe", line="safe", row=1)
+            if race.safety_car_laps > 0:
+                pit_button = discord.ui.Button(label="Pit Stop (Safety Car)", emoji="🛠️", style=discord.ButtonStyle.primary, row=2)
+                async def open_sc_pit(interaction):
+                    driver = race.drivers.get(interaction.user.id) if race_is_active(race) else None
+                    if driver is None or driver.finished or driver.retired:
+                        return await interaction.response.send_message("Você não é um piloto ativo nesta corrida.", ephemeral=True)
+                    if driver.tire_changes_remaining <= 0:
+                        return await interaction.response.send_message("Você já usou suas 2 trocas de pneus disponíveis.", ephemeral=True)
+                    if driver.last_pit_lap == race.current_lap:
+                        return await interaction.response.send_message("Você já fez um pit stop nesta volta.", ephemeral=True)
+                    await interaction.response.send_message("Safety Car: escolha o composto para a troca:", view=PitTireView(self, interaction.user.id), ephemeral=True)
+                pit_button.callback = open_sc_pit
+                self.add_item(pit_button)
         else:
             self.add_action("Manter ritmo", "⚖️", "normal", row=0)
             self.add_action("Defender posição", "🛡️", "defensive", row=0)
@@ -1622,8 +1635,12 @@ class RaceDecisionView(discord.ui.View):
         gap = driver.total_time - active[index-1].total_time if index > 0 else None
         if attack and (race.current_segment_type != "reta" or gap is None or gap > OVERTAKE_DETECTION_SECONDS):
             return await interaction.response.send_message("DRS indisponível: precisa estar até 1,0s do carro à frente em uma reta.", ephemeral=True)
-        if (boost or pit or attack) and race.current_segment_type != "reta":
+        if (boost or attack) and race.current_segment_type != "reta":
             return await interaction.response.send_message("Essa ação só está disponível em uma reta.", ephemeral=True)
+        if pit and race.current_segment_type != "reta" and race.safety_car_laps <= 0:
+            return await interaction.response.send_message("Pit stop fora de uma reta só é permitido durante o Safety Car.", ephemeral=True)
+        if pit and driver.tire_changes_remaining <= 0:
+            return await interaction.response.send_message("Você já usou suas 2 trocas de pneus disponíveis.", ephemeral=True)
         if pit and driver.last_pit_lap == race.current_lap:
             return await interaction.response.send_message("Você já fez um pit stop nesta volta.", ephemeral=True)
         async with race.decision_lock:
@@ -1668,6 +1685,9 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
         if chosen_tire not in TIRES:
             chosen_tire = "Medium"
         old_tire = driver.tire
+        if driver.tire_changes_remaining <= 0:
+            return base + 999.0, f"⚠️ {driver_display_name(driver)} não tem mais trocas de pneus disponíveis."
+        driver.tire_changes_remaining -= 1
         driver.tire = chosen_tire
         driver.tire_wear = 0.0
         driver.car_damage = max(0.0, driver.car_damage - 12.0)
@@ -1676,10 +1696,12 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
         crew_loss = random.uniform(0.5, 2.5)
         if random.random() < 0.18:
             crew_loss += random.uniform(2.0, 5.0)
-        pit_penalty = 18.0 + crew_loss
-        event = (f"🛠️ PIT STOP: {driver_display_name(driver)} trocou "
+        base_pit_loss = 6.0 if race.safety_car_laps > 0 else 18.0
+        pit_penalty = base_pit_loss + crew_loss
+        sc_label = " durante o Safety Car" if race.safety_car_laps > 0 else ""
+        event = (f"🛠️ PIT STOP{sc_label}: {driver_display_name(driver)} trocou "
                  f"{TIRES[old_tire]['label'] if old_tire in TIRES else 'pneus'} por {TIRES[chosen_tire]['label']}. "
-                 f"Parada: 18s + {crew_loss:.1f}s de perda adicional na equipe.")
+                 f"Parada: {base_pit_loss:.0f}s + {crew_loss:.1f}s de perda adicional. Restam {driver.tire_changes_remaining} trocas.")
     if driver.ability == "Largada Explosiva" and race.current_lap == 1:
         skill_bonus += base * 0.006
     if driver.ability == "Última Volta" and race.current_lap == race.total_laps:
