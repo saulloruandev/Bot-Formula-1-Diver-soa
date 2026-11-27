@@ -1825,6 +1825,8 @@ class QualifyingView(discord.ui.View):
             return await interaction.response.send_message("Somente o host desta corrida pode iniciar.", ephemeral=True)
         if not race.qualifying_done or race.race_started:
             return await interaction.response.send_message("A corrida ainda não está pronta para começar.", ephemeral=True)
+        if race.lobby_timeout_task and not race.lobby_timeout_task.done():
+            race.lobby_timeout_task.cancel()
         race.race_task = asyncio.create_task(run_race(race))
         await interaction.response.edit_message(content="🚦 Corrida iniciada! O painel será atualizado a cada trecho.", view=ClosedView())
 
