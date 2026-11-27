@@ -2037,14 +2037,26 @@ class AddBotsModal(discord.ui.Modal, title="Adicionar pilotos controlados pelo b
         try: amount = int(self.amount.value)
         except ValueError: return await interaction.response.send_message("Informe um número inteiro.", ephemeral=True)
         if amount < 1: return await interaction.response.send_message("Informe pelo menos 1 bot.", ephemeral=True)
-        amount = min(amount, self.race.max_players - len(self.race.drivers))
-        if amount <= 0: return await interaction.response.send_message("O lobby já está cheio.", ephemeral=True)
-        added = []
-        for _ in range(amount):
-            self.race.bot_counter += 1; bot_id = -self.race.bot_counter
-            driver = create_bot_driver(self.race, bot_id); self.race.drivers[bot_id] = driver; added.append(driver.race_name)
-        await interaction.response.send_message(f"🤖 Adicionei {len(added)} piloto(s): {', '.join(added)}. Eles já entram configurados e prontos.", ephemeral=True)
-        await refresh_lobby(self.race, LobbyView(self.race))
+        async with self.race.lock:
+            if not race_is_active(self.race) or self.race.started:
+                return await interaction.response.send_message("O lobby não aceita mais alterações.", ephemeral=True)
+            amount = min(amount, self.race.max_players - len(self.race.drivers))
+            if amount <= 0:
+                return await interaction.response.send_message("O lobby já está cheio.", ephemeral=True)
+            added = []
+            for _ in range(amount):
+                self.race.bot_counter += 1
+                bot_id = -self.race.bot_counter
+                driver = create_bot_driver(self.race, bot_id)
+                self.race.drivers[bot_id] = driver
+                added.append(driver.race_name)
+            # Atualiza a mensagem pública antes de confirmar ao host: se o Discord
+            # rejeitar a edição, o callback não informa que a lista foi atualizada.
+            await refresh_lobby(self.race, LobbyView(self.race))
+        await interaction.response.send_message(
+            f"🤖 Adicionei {len(added)} piloto(s): {', '.join(added)}. Eles já entram configurados e prontos.",
+            ephemeral=True,
+        )
 
 BOT_PILOT_NAMES = ["Charles Leclerc", "Lewis Hamilton", "Max Verstappen", "Lando Norris", "Oscar Piastri", "Fernando Alonso", "Carlos Sainz", "George Russell", "Kimi Antonelli", "Pierre Gasly", "Esteban Ocon", "Alex Albon", "Nico Hülkenberg", "Yuki Tsunoda", "Oliver Bearman", "Ayrton Senna", "Michael Schumacher", "Sebastian Vettel", "Daniel Ricciardo", "Valtteri Bottas"]
 
