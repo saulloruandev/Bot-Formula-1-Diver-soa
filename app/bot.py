@@ -5,6 +5,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Dict, Optional, List, TypedDict
 from pathlib import Path
+from types import SimpleNamespace
 from io import BytesIO
 
 import aiohttp
@@ -174,6 +175,8 @@ class Driver:
     pit_stops: int = 0
     last_pit_lap: int = 0
     tire_warning_lap: int = 0
+    tire_changes_remaining: int = 2
+    is_bot: bool = False
 
     def effective_skill(self, attribute):
         return getattr(self, attribute) + getattr(self, f"style_{attribute}", 0)
@@ -231,6 +234,7 @@ class Race:
     mode: str = "casual"
     max_players: int = 10
     lobby_timeout_task: Optional[asyncio.Task] = None
+    bot_counter: int = 0
 
     @property
     def full(self):
@@ -1456,6 +1460,14 @@ class LobbyView(discord.ui.View):
         await interaction.response.send_message(f"Status: {'pronto' if driver.ready else 'configurando'}.", ephemeral=True)
         await refresh_lobby(self.race, self)
 
+    @discord.ui.button(label="Adicionar bots", emoji="🤖", style=discord.ButtonStyle.secondary, row=3)
+    async def add_bots(self, interaction, button):
+        if interaction.user.id != self.race.host_id:
+            return await interaction.response.send_message("Somente o criador pode adicionar bots.", ephemeral=True)
+        if not self.active(interaction):
+            return await interaction.response.send_message("O lobby não está mais disponível.", ephemeral=True)
+        await interaction.response.send_modal(AddBotsModal(self.race))
+
     @discord.ui.button(label="Configurar corrida", emoji="🛠️", style=discord.ButtonStyle.primary, row=2)
     async def settings(self, interaction, button):
         if interaction.user.id != self.race.host_id:
@@ -1583,7 +1595,9 @@ class RaceDecisionView(discord.ui.View):
                     return await interaction.response.send_message("Você não é um piloto ativo nesta corrida.", ephemeral=True)
                 if driver.last_pit_lap == race.current_lap:
                     return await interaction.response.send_message("Você já fez um pit stop nesta volta.", ephemeral=True)
-                await interaction.response.send_message("Escolha o pneu que deseja colocar:", view=PitTireView(self, interaction.user.id), ephemeral=True)
+                if driver.tire_changes_remaining <= 0:
+                    return await interaction.response.send_message("Você já usou suas 2 trocas de pneus disponíveis.", ephemeral=True)
+                await interaction.response.send_message("Safety Car ativo: pit stop com perda reduzida. Escolha o composto:" if race.safety_car_laps > 0 else "Escolha o pneu que deseja colocar:", view=PitTireView(self, interaction.user.id), ephemeral=True)
             pit_button.callback = open_pit_menu
             self.add_item(pit_button)
 
@@ -1898,6 +1912,48 @@ class RemoveDriverSelect(discord.ui.Select):
             await interaction.response.send_message("Esse piloto não está mais no lobby.", ephemeral=True)
 
 
+class AddBotsModal(discord.ui.Modal, title="Adicionar pilotos controlados pelo bot"):
+    amount = discord.ui.TextInput(label="Quantidade de bots para adicionar", placeholder="Ex.: 3", min_length=1, max_length=2)
+    def __init__(self, race):
+        super().__init__(); self.race = race
+    async def on_submit(self, interaction):
+        if interaction.user.id != self.race.host_id or not race_is_active(self.race) or self.race.started:
+            return await interaction.response.send_message("Somente o criador pode alterar este lobby antes da classificação.", ephemeral=True)
+        try: amount = int(self.amount.value)
+        except ValueError: return await interaction.response.send_message("Informe um número inteiro.", ephemeral=True)
+        if amount < 1: return await interaction.response.send_message("Informe pelo menos 1 bot.", ephemeral=True)
+        amount = min(amount, self.race.max_players - len(self.race.drivers))
+        if amount <= 0: return await interaction.response.send_message("O lobby já está cheio.", ephemeral=True)
+        added = []
+        for _ in range(amount):
+            self.race.bot_counter += 1; bot_id = -self.race.bot_counter
+            driver = create_bot_driver(self.race, bot_id); self.race.drivers[bot_id] = driver; added.append(driver.race_name)
+        await interaction.response.send_message(f"🤖 Adicionei {len(added)} piloto(s): {', '.join(added)}. Eles já entram configurados e prontos.", ephemeral=True)
+        await refresh_lobby(self.race, LobbyView(self.race))
+
+BOT_PILOT_NAMES = ["Charles Leclerc", "Lewis Hamilton", "Max Verstappen", "Lando Norris", "Oscar Piastri", "Fernando Alonso", "Carlos Sainz", "George Russell", "Kimi Antonelli", "Pierre Gasly", "Esteban Ocon", "Alex Albon", "Nico Hülkenberg", "Yuki Tsunoda", "Oliver Bearman", "Ayrton Senna", "Michael Schumacher", "Sebastian Vettel", "Daniel Ricciardo", "Valtteri Bottas"]
+
+def create_bot_driver(race, bot_id):
+    name = random.choice(BOT_PILOT_NAMES); style = roll_style(); skills = {key: 0 for key, _, _ in SKILL_FIELDS}; remaining = SKILL_POINTS
+    for index, (key, _, _) in enumerate(SKILL_FIELDS):
+        points = remaining if index == len(SKILL_FIELDS) - 1 else random.randint(0, remaining)
+        skills[key] = points; remaining -= points
+    rain = WEATHER[race.weather_name]["rain"]; tire = "Wet" if rain > 0.65 else "Intermediate" if rain > 0.10 else random.choice(("Soft", "Medium", "Hard"))
+    fake_user = SimpleNamespace(id=bot_id, display_name=name, mention=f"🤖 {name}", display_avatar=SimpleNamespace(url=f"https://cdn.discordapp.com/embed/avatars/{abs(bot_id) % 6}.png"))
+    bonuses = style.get("skills", {})
+    return Driver(user=fake_user, race_name=name, team_name=random.choice(("Ferrari", "Mercedes", "McLaren", "Red Bull", "Aston Martin", "Williams")), tyre_management=skills["tyre_management"], curves=skills["curves"], speed=skills["speed"], qualifying=skills["qualifying"], engine=skills["engine"], control=skills["control"], straights=skills["speed"], braking=skills["qualifying"], acceleration=skills["engine"], ability=random.choice(list(ABILITY_CATALOG)), tire=tire, ready=True, style_name=style["name"], style_tyre_management=int(bonuses.get("tyre_management", 0)), style_curves=int(bonuses.get("curves", 0)), style_straights=int(bonuses.get("straights", 0)), style_braking=int(bonuses.get("braking", 0)), style_acceleration=int(bonuses.get("acceleration", 0)), style_control=int(bonuses.get("control", 0)), is_bot=True)
+
+def bot_race_decision(driver, race, segment, active):
+    if driver.tire_changes_remaining > 0 and driver.last_pit_lap != race.current_lap and (driver.tire_wear >= 62 or (race.safety_car_laps > 0 and driver.tire_wear >= 35)):
+        rain = WEATHER[race.weather_name]["rain"]; tire = "Wet" if rain > 0.65 else "Intermediate" if rain > 0.10 else random.choice(("Medium", "Hard"))
+        return {"mode": "normal", "attack": False, "boost": False, "pit": True, "pit_tire": tire}
+    if segment == "curva":
+        return {"mode": random.choices(("normal", "defensive", "safe", "aggressive"), weights=(45,20,25,10))[0], "attack": False, "boost": False, "line": random.choice(("inside","outside","safe"))}
+    ordered = sorted(active, key=lambda item: item.total_time); index = ordered.index(driver)
+    gap = driver.total_time - ordered[index-1].total_time if index > 0 else None
+    return {"mode": random.choices(("normal","defensive","aggressive"), weights=(60,15,25))[0], "attack": gap is not None and gap <= OVERTAKE_DETECTION_SECONDS and random.random() < .55, "boost": driver.energy > 35 and random.random() < .18}
+
+
 class LobbyConfigView(discord.ui.View):
     def __init__(self, race):
         super().__init__(timeout=120)
@@ -2209,6 +2265,9 @@ async def run_race(race):
                 break
             for driver in active:
                 driver.chosen_action = None
+                for driver in active:
+                    if driver.is_bot:
+                        driver.chosen_action = bot_race_decision(driver, race, segment, active)
             segment_title = f"{segment.upper()} {segment_index}/{len(segments)}"
             race.current_decision_label = f"Volta {lap}/{race.total_laps} • {segment_title}"
             await update_race_panel(race, active, segment_title, lap_events, show_decision=True)
@@ -2278,8 +2337,8 @@ async def run_race(race):
             incident = any("acidente" in event.lower() or "abandono" in event.lower() for event in lap_events)
             still_running = [d for d in race.drivers.values() if not d.retired]
             if incident and len(still_running) > 1 and race.safety_car_laps == 0 and random.random() < 0.55:
-                race.safety_car_laps = 1
-                safety_event = "🚨 SAFETY CAR NA PISTA! Pelotão neutralizado; as diferenças foram reduzidas."
+                race.safety_car_laps = 2
+                safety_event = "🚨 SAFETY CAR NA PISTA! Neutralização até o fim desta volta e por mais uma volta completa para limpeza da pista. Pit stops têm perda reduzida."
                 lap_events.append(safety_event)
                 await publish_important_event(race, safety_event)
             if race.safety_car_laps > 0 and len(still_running) > 1:
