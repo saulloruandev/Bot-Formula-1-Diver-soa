@@ -3205,7 +3205,7 @@ def register_normal_result(race, order):
     bot_count = len(order) - len(human_drivers)
     if race.mode != "casual" or race.race_id in NORMAL_RANKING.get("races", []):
         return
-    if len(human_drivers) < 3 or bot_count >= len(human_drivers):
+    if len(human_drivers) < 3 or bot_count > len(human_drivers):
         return
     players = NORMAL_RANKING.setdefault("players", {})
     for position, driver in enumerate(order, 1):
@@ -3244,7 +3244,7 @@ async def register_championship_result(race, order, fastest):
         return
     human_drivers = [driver for driver in order if not getattr(driver, "is_bot", False)]
     bot_count = len(order) - len(human_drivers)
-    if len(human_drivers) < 3 or bot_count >= len(human_drivers):
+    if len(human_drivers) < 3 or bot_count > len(human_drivers):
         return
     season = season_for(race.guild_id)
     if not season:
