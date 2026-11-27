@@ -1,16 +1,16 @@
 {
   "ultrapassagem": [
-    "https://commons.wikimedia.org/wiki/Special:FilePath/Hamilton_vettel_china_2012_cropped.jpg"
+    "https://media.discordapp.net/attachments/771536067714482226/1575282984196640768/Max_Verstappen_overtaking_Lewis_Hamilton_2017_Malaysia_2.jpg?ex=6b0ab25a&is=6b0960da&hm=e5fac7a7505a9f2a11a5802c97663a85582001f3845535dd038adc4043e6b7b2&format=webp&width=1024&height=512", "https://media.discordapp.net/attachments/771536067714482226/1575282983865159850/Hamilton_vettel_china_2012_cropped.jpg?ex=6b0a099a&is=6b08b81a&hm=97ec50ac7e6d4b6cb989622fa70397c13526b143577b6639d14d225166985343&format=webp&width=768&height=444", "https://media.discordapp.net/attachments/771536067714482226/1575282985006268487/Nico_Rosberg_overtaking_Heidfeld_2007_Brazil.jpg?ex=6b0a099a&is=6b08b81a&hm=a1c1d5114da38047efa8b44a840b3c74da6da3367df75e61bea2547501e897a2&format=webp&width=768&height=498", "https://media.discordapp.net/attachments/771536067714482226/1575282984527995062/Max_Verstappen_overtaking_Lewis_Hamilton_2017_Malaysia_3.jpg?ex=6b0a099a&is=6b08b81a&hm=a449a2787a1472b2ffa943a3d67a3758f1b08e16a55d17a060d799786219b4a7&format=webp&width=768&height=512"
   ],
-  "colisao": [],
+  "colisao": ["https://media.discordapp.net/attachments/771536067714482226/1575282832652378212/Felipe_Massa_2014_British_GP_001_cropped.jpg?ex=6b0a0976&is=6b08b7f6&hm=2c8c93e943e2ad1e18eaa53340159c0654d81018f6226259936c613bba3eec59&format=webp&width=768&height=494"],
   "rodada": [],
-  "pneu_estourado": [],
-  "quebra_motor": [],
+  "pneu_estourado": ["https://media.discordapp.net/attachments/771536067714482226/1575282881004183572/F1-hamilton-inglaterra-2020-estouro-pneu-corrida.jpg?ex=6b0a0982&is=6b08b802&hm=91cb248909c9279f4a7914e23d3cddd084e200ce310fa2b9c7be74781948eebd&format=webp&width=640&height=401"],
+  "quebra_motor": ["https://media.discordapp.net/attachments/771536067714482226/1575282911958274129/Lewis_Hamilton_engine_failure_2016_Malaysian_GP_2.jpg?ex=6b0a0989&is=6b08b809&hm=3db64afd273f2758fbf616a59d272bf5ee8bf494cc38d3fa756a32814c6ffac1&format=webp&width=768&height=512", "https://media.discordapp.net/attachments/771536067714482226/1575282911333064844/Kamui_Kobayashi_engine_failure_2014_Singapore_RaceL00.jpg?ex=6b0a0989&is=6b08b809&hm=5cad80052665c5c6ac05389724cf5529c1d0b17471ab4e6481eca996d49c2f84&format=webp&width=1024&height=512"],
   "safety_car": [
-    "https://commons.wikimedia.org/wiki/Special:FilePath/F1%20Safety%20cars.jpg"
+    "https://commons.wikimedia.org/wiki/Special:FilePath/F1%20Safety%20cars.jpg", "https://media.discordapp.net/attachments/771536067714482226/1575282947022528673/OIP_1.webp?ex=6b0ab251&is=6b0960d1&hm=e419bb5d464d27e1bc63fb5148daf1669e34f8c85b3876d2ee37113b7be415d6&format=webp&width=384&height=256"
   ],
   "bandeira_vermelha": ["https://cdn.discordapp.com/attachments/771536067714482226/1575282832052461588/OIP.webp?ex=6b0960b6&is=6b080f36&hm=f3ad69b6e7640634e0978328d955f20577a2d11ac8ace35901c2ccdc3c6d6a8e&"],
-  "volta_rapida": [],
+  "volta_rapida": ["https://media.discordapp.net/attachments/771536067714482226/1575283004803121173/OIP.webp?ex=6b0a099f&is=6b08b81f&hm=6778f9f48c0ed638d4fcd5561f8f56612ab9838b1da709c86b0103b3a6135624&format=webp&width=384&height=216", "https://media.discordapp.net/attachments/771536067714482226/1575283005185065080/singapura-2024-f1-corrida-rb-daniel-ricciardo-01-1200x800.webp?ex=6b0ab25f&is=6b0960df&hm=dfce7b1919da6da9bb6b5f3dfe2af96517c1a897e2ca84535eed41fe7d2c59e9&format=webp&width=1024&height=683"],
   "pitstop": [],
   "clima": []
 }
