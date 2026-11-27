@@ -146,6 +146,7 @@ class DecisionAction(TypedDict, total=False):
     line: str
     pit: bool
     pit_tire: str
+    pit_repair: bool
 
 
 @dataclass
@@ -195,6 +196,11 @@ class Driver:
     tire_warning_lap: int = 0
     tire_changes_remaining: int = 1
     is_bot: bool = False
+    overtakes_made: int = 0
+    incidents: int = 0
+    spins: int = 0
+    severe_accidents: int = 0
+    lap_times: List[float] = field(default_factory=list)
 
     def effective_skill(self, attribute):
         return getattr(self, attribute) + getattr(self, f"style_{attribute}", 0)
@@ -1055,7 +1061,11 @@ async def sync_pilot_role(guild, member, style_name):
         return None, "Não foi possível sincronizar cargos fora de um servidor."
     mapped_ids = {int(role_id) for role_id in PILOT_ROLE_IDS.values() if role_id}
     target_id = PILOT_ROLE_IDS.get(style_name) if style_name else None
-    target_role = guild.get_role(int(target_id)) if target_id else None
+    if not target_id:
+        return None, f"Não existe ID configurado em PILOT_ROLE_IDS para {style_name}."
+    target_role = guild.get_role(int(target_id))
+    if target_role is None:
+        return None, f"O ID configurado para {style_name} ({target_id}) não corresponde a nenhum cargo deste servidor. Confira o ID em PILOT_ROLE_IDS."
     bot_member = guild.me
     if bot_member is None or not bot_member.guild_permissions.manage_roles:
         return target_role, "O bot precisa da permissão Gerenciar cargos."
@@ -1648,13 +1658,27 @@ class PitTireSelect(discord.ui.Select):
     def __init__(self, decision_view, user_id):
         self.decision_view = decision_view
         self.user_id = user_id
-        options = [discord.SelectOption(label=TIRES[key]["label"], value=key) for key in TIRES]
-        super().__init__(placeholder="Escolha o composto para o pit stop", options=options, min_values=1, max_values=1)
+        options = []
+        for key, tire in TIRES.items():
+            options.append(discord.SelectOption(
+                label=f"{tire['label']} — só pneus",
+                value=f"{key}|0",
+                description="Troca os pneus e faz a manutenção básica.",
+            ))
+            options.append(discord.SelectOption(
+                label=f"{tire['label']} + reparar asa",
+                value=f"{key}|1",
+                description="Repara mais 30% do dano; acrescenta 4s ao pit stop.",
+            ))
+        super().__init__(placeholder="Escolha pneus e serviço do pit stop", options=options, min_values=1, max_values=1)
 
     async def callback(self, interaction):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("Esse menu pertence a outro piloto.", ephemeral=True)
-        await self.decision_view.record_choice(interaction, "normal", pit=True, pit_tire=self.values[0])
+        tire_key, repair_flag = self.values[0].split("|", 1)
+        await self.decision_view.record_choice(
+            interaction, "normal", pit=True, pit_tire=tire_key, pit_repair=repair_flag == "1"
+        )
 
 
 class PitTireView(discord.ui.View):
@@ -1683,7 +1707,10 @@ class RaceDecisionView(discord.ui.View):
                         return await interaction.response.send_message("Você já utilizou os 2 jogos de pneus disponíveis (jogo inicial + 1 troca).", ephemeral=True)
                     if driver.last_pit_lap == race.current_lap:
                         return await interaction.response.send_message("Você já fez um pit stop nesta volta.", ephemeral=True)
-                    await interaction.response.send_message("Safety Car: escolha o composto para a troca:", view=PitTireView(self, interaction.user.id), ephemeral=True)
+                    await interaction.response.send_message(
+                        f"Safety Car ativo: escolha pneus e se deseja reparar a asa (+4s, até 30% de dano). Dano atual: {driver.car_damage:.0f}%.",
+                        view=PitTireView(self, interaction.user.id), ephemeral=True
+                    )
                 pit_button.callback = open_sc_pit
                 self.add_item(pit_button)
         else:
@@ -1701,7 +1728,12 @@ class RaceDecisionView(discord.ui.View):
                     return await interaction.response.send_message("Você já fez um pit stop nesta volta.", ephemeral=True)
                 if driver.tire_changes_remaining <= 0:
                     return await interaction.response.send_message("Você já utilizou os 2 jogos de pneus disponíveis (jogo inicial + 1 troca).", ephemeral=True)
-                await interaction.response.send_message("Safety Car ativo: pit stop com perda reduzida. Escolha o composto:" if race.safety_car_laps > 0 else "Escolha o pneu que deseja colocar:", view=PitTireView(self, interaction.user.id), ephemeral=True)
+                await interaction.response.send_message(
+                    (f"Safety Car ativo: pit stop com perda reduzida. Escolha pneus e se deseja reparar a asa (+4s, até 30% de dano). Dano atual: {driver.car_damage:.0f}%."
+                     if race.safety_car_laps > 0 else
+                     f"Escolha pneus e se deseja reparar a asa (+4s, até 30% de dano). Dano atual: {driver.car_damage:.0f}%."),
+                    view=PitTireView(self, interaction.user.id), ephemeral=True
+                )
             pit_button.callback = open_pit_menu
             self.add_item(pit_button)
 
@@ -1716,7 +1748,7 @@ class RaceDecisionView(discord.ui.View):
         button.callback = callback
         self.add_item(button)
 
-    async def record_choice(self, interaction, mode, attack=False, boost=False, line=None, pit=False, pit_tire=None):
+    async def record_choice(self, interaction, mode, attack=False, boost=False, line=None, pit=False, pit_tire=None, pit_repair=False):
         race = self.race
         driver = race.drivers.get(interaction.user.id) if race_is_active(race) else None
         if interaction.channel_id != race.channel_id or not race.race_started or driver is None or driver.finished or driver.retired:
@@ -1742,6 +1774,7 @@ class RaceDecisionView(discord.ui.View):
             if pit:
                 action["pit"] = True
                 action["pit_tire"] = pit_tire
+                action["pit_repair"] = bool(pit_repair)
             driver.chosen_action = action
             active_now = [d for d in race.drivers.values() if not d.finished and not d.retired]
             await interaction.response.edit_message(embed=decision_status_embed(race, active_now, race.current_decision_label, []), view=self)
@@ -1781,18 +1814,27 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
         driver.tire_changes_remaining -= 1
         driver.tire = chosen_tire
         driver.tire_wear = 0.0
+        # Toda parada mantém a manutenção básica de 12%; o serviço opcional
+        # simula a troca/reparo adicional da asa dianteira.
         driver.car_damage = max(0.0, driver.car_damage - 12.0)
+        repair_penalty = 0.0
+        repaired = 0.0
+        if action.get("pit_repair"):
+            repaired = min(30.0, driver.car_damage)
+            driver.car_damage = max(0.0, driver.car_damage - 30.0)
+            repair_penalty = 4.0
         driver.pit_stops += 1
         driver.last_pit_lap = race.current_lap
         crew_loss = random.uniform(0.5, 2.5)
         if random.random() < 0.18:
             crew_loss += random.uniform(2.0, 5.0)
         base_pit_loss = 6.0 if race.safety_car_laps > 0 else 18.0
-        pit_penalty = base_pit_loss + crew_loss
+        pit_penalty = base_pit_loss + crew_loss + repair_penalty
         sc_label = " durante o Safety Car" if race.safety_car_laps > 0 else ""
+        repair_label = f" Reparo adicional da asa: -{repaired:.0f}% dano (+{repair_penalty:.0f}s)." if repaired > 0 else ""
         event = (f"🛠️ PIT STOP{sc_label}: {driver_display_name(driver)} trocou "
                  f"{TIRES[old_tire]['label'] if old_tire in TIRES else 'pneus'} por {TIRES[chosen_tire]['label']}. "
-                 f"Parada: {base_pit_loss:.0f}s + {crew_loss:.1f}s de perda adicional. Restam {driver.tire_changes_remaining} trocas de jogo.")
+                 f"Parada: {base_pit_loss:.0f}s + {crew_loss:.1f}s da equipe.{repair_label} Restam {driver.tire_changes_remaining} trocas de jogo.")
     if driver.ability == "Largada Explosiva" and race.current_lap == 1:
         skill_bonus += base * 0.006
     if driver.ability == "Última Volta" and race.current_lap == race.total_laps:
@@ -1884,14 +1926,19 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
         severity = random.random()
         if severity < 0.68:
             lost = base * random.uniform(0.05, 0.14)
+            driver.incidents += 1
+            driver.spins += 1
             driver.car_damage = min(100.0, driver.car_damage + random.uniform(3, 9))
             event = (event + " " if event else "") + f"💥 Derrapagem/contato: +{driver.car_damage:.0f}% dano, perdeu tempo."
         elif severity < 0.96:
             lost = base * random.uniform(0.14, 0.30)
+            driver.incidents += 1
             driver.car_damage = min(100.0, driver.car_damage + random.uniform(12, 24))
             event = (event + " " if event else "") + f"🚧 Acidente moderado: dano do carro {driver.car_damage:.0f}%."
         else:
             lost = base * random.uniform(0.30, 0.55)
+            driver.incidents += 1
+            driver.severe_accidents += 1
             driver.car_damage = min(100.0, driver.car_damage + random.uniform(30, 45))
             event = (event + " " if event else "") + f"🛑 Acidente grave: dano do carro {driver.car_damage:.0f}%."
         time += lost
@@ -2376,6 +2423,102 @@ async def build_podium_file(order):
     return discord.File(output, filename="podio-f1.png")
 
 
+def race_award_data(order, fastest):
+    humans = [driver for driver in order if not getattr(driver, "is_bot", False)]
+    if not humans:
+        return None
+    metrics = []
+    for final_position, driver in enumerate(order, 1):
+        if getattr(driver, "is_bot", False):
+            continue
+        grid_position = driver.grid_position or final_position
+        positions_gained = grid_position - final_position
+        lap_spread = 0.0
+        if len(driver.lap_times) > 1:
+            mean = sum(driver.lap_times) / len(driver.lap_times)
+            lap_spread = (sum((value - mean) ** 2 for value in driver.lap_times) / len(driver.lap_times)) ** 0.5
+        consistency_bonus = max(0.0, 3.0 - lap_spread)
+        best_score = (
+            driver.overtakes_made * 2.5
+            + positions_gained * 2.0
+            + (2.0 if fastest and fastest.user.id == driver.user.id else 0.0)
+            + consistency_bonus
+            + (1.0 if not driver.retired else 0.0)
+            - driver.incidents * 2.5
+            - driver.severe_accidents * 3.0
+            - (5.0 if driver.retired else 0.0)
+        )
+        positions_lost = max(0, final_position - grid_position)
+        worst_score = (
+            driver.incidents * 3.0
+            + driver.spins * 2.0
+            + driver.severe_accidents * 5.0
+            + positions_lost * 1.5
+            + max(0.0, lap_spread - 2.0) * 0.8
+            + (6.0 if driver.retired else 0.0)
+            - driver.overtakes_made * 0.5
+        )
+        metrics.append({
+            "driver": driver,
+            "position": final_position,
+            "grid": grid_position,
+            "gained": positions_gained,
+            "spread": lap_spread,
+            "best_score": best_score,
+            "worst_score": worst_score,
+        })
+    best = max(metrics, key=lambda item: (item["best_score"], item["gained"], item["driver"].overtakes_made))
+    worst = max(metrics, key=lambda item: (item["worst_score"], item["driver"].incidents, item["driver"].severe_accidents))
+    return {"best": best, "worst": worst}
+
+
+def race_award_embed(award_data, award_type):
+    item = award_data[award_type]
+    driver = item["driver"]
+    is_best = award_type == "best"
+    title = "🌟 MELHOR PILOTO DA CORRIDA" if is_best else "🫣 PILOTO DO CAOS"
+    color = discord.Color.gold() if is_best else discord.Color.red()
+    movement = f"+{item['gained']} posições" if item["gained"] > 0 else f"{item['gained']} posições" if item["gained"] < 0 else "manteve a posição"
+    description = (
+        f"**{driver_display_name(driver)}**\n"
+        f"Resultado: **P{item['position']}** (largou em P{item['grid']})\n"
+        f"Ultrapassagens: **{driver.overtakes_made}**\n"
+        f"Movimentação no grid: **{movement}**\n"
+        f"Incidentes: **{driver.incidents}** • Derrapagens: **{driver.spins}** • Acidentes graves: **{driver.severe_accidents}**\n"
+        f"Consistência das voltas: **{item['spread']:.2f}s** de variação média\n\n"
+        + (
+            "Pontuação considera ultrapassagens, posições recuperadas, volta rápida, regularidade e incidentes."
+            if is_best else
+            "Destaque humorístico calculado por incidentes, derrapagens, danos, posições perdidas e abandono."
+        )
+    )
+    embed = discord.Embed(title=title, description=description, color=color)
+    profile = USER_PROFILES.get(str(driver.user.id), {})
+    photo = profile.get("photo_url") or str(driver.user.display_avatar.url)
+    if isinstance(photo, str) and photo.startswith(("https://", "http://")):
+        embed.set_image(url=photo)
+    embed.set_footer(text="Use as setas para alternar entre as duas premiações.")
+    return embed
+
+
+class RaceAwardsView(discord.ui.View):
+    def __init__(self, award_data):
+        super().__init__(timeout=300)
+        self.award_data = award_data
+
+    async def change_page(self, interaction, page):
+        key = "best" if page == 0 else "worst"
+        await interaction.response.edit_message(embed=race_award_embed(self.award_data, key), view=self)
+
+    @discord.ui.button(label="Melhor piloto", emoji="⬅️", style=discord.ButtonStyle.success)
+    async def best(self, interaction, button):
+        await self.change_page(interaction, 0)
+
+    @discord.ui.button(label="Pior piloto", emoji="➡️", style=discord.ButtonStyle.danger)
+    async def worst(self, interaction, button):
+        await self.change_page(interaction, 1)
+
+
 async def run_race(race):
     race.race_started = True
     if race.lobby_timeout_task and not race.lobby_timeout_task.done():
@@ -2486,6 +2629,7 @@ async def run_race(race):
                         f"↗️ **{driver_display_name(driver)} ultrapassou {names}** "
                         f"na volta {lap}, trecho {segment_index}/{len(segments)}!"
                     )
+                    driver.overtakes_made += len(passed)
                     lap_events.append(overtake_event)
                     await publish_important_event(race, overtake_event)
             # Safety Car é reservado a incidentes realmente graves; derrapagens e
@@ -2536,9 +2680,11 @@ async def run_race(race):
                 if not driver.finished and not driver.retired:
                     driver.last_lap_time = driver.total_time - lap_start_times.get(driver.user.id, driver.total_time)
                     minimum_valid_lap = circuit["base_lap"] * 0.55
-                    if minimum_valid_lap <= driver.last_lap_time < (driver.best_lap_time or float("inf")):
-                        driver.best_lap_time = driver.last_lap_time
-                        driver.best_lap_number = lap
+                    if minimum_valid_lap <= driver.last_lap_time:
+                        driver.lap_times.append(driver.last_lap_time)
+                        if driver.last_lap_time < (driver.best_lap_time or float("inf")):
+                            driver.best_lap_time = driver.last_lap_time
+                            driver.best_lap_number = lap
         if race.safety_car_laps > 0 and not safety_car_triggered_this_lap:
             race.safety_car_laps = 0
             resume_segment_index = 1
@@ -2597,6 +2743,9 @@ async def run_race(race):
         else:
             await race.channel.send(embed=embed)
     await flush_race_broadcasts(race)
+    awards = race_award_data(final_order, fastest)
+    if awards:
+        await race.channel.send(embed=race_award_embed(awards, "best"), view=RaceAwardsView(awards))
     if race.lobby_timeout_task and not race.lobby_timeout_task.done():
         race.lobby_timeout_task.cancel()
     races.pop(race.race_id, None)
@@ -2688,23 +2837,71 @@ class InventoryView(discord.ui.View):
         await interaction.response.send_message("⏸️ Gamepass Pular Giro desativada no seu perfil.", ephemeral=True)
 
 class ProfileSkillsModal(discord.ui.Modal, title="Distribuir 10 pontos pessoais"):
-    distribution = discord.ui.TextInput(label="Pneus, Curvas, Veloc, Classif, Motor, Ctrl", placeholder="Use os pontos nesta ordem: pneus, curvas, velocidade, classificação, motor, controle", max_length=30, required=True)
     def __init__(self, owner_id, race=None):
-        super().__init__(); self.owner_id = owner_id; self.source_message_id = None; self.race = race
-        profile = gacha_profile(owner_id)
-        self.distribution.default = ", ".join(str(profile["skills"].get(key, 0)) for key, _, _ in SKILL_FIELDS)
+        super().__init__()
+        self.owner_id = owner_id
+        self.source_message_id = None
+        self.race = race
+        skills = gacha_profile(owner_id)["skills"]
+        self.tyres = discord.ui.TextInput(label="Gerenciamento de pneus", placeholder="0 a 10 pontos", default=str(skills.get("tyre_management", 0)), max_length=2)
+        self.curves = discord.ui.TextInput(label="Curvas", placeholder="0 a 10 pontos", default=str(skills.get("curves", 0)), max_length=2)
+        self.speed = discord.ui.TextInput(label="Velocidade", placeholder="0 a 10 pontos", default=str(skills.get("speed", 0)), max_length=2)
+        self.qualifying = discord.ui.TextInput(label="Classificação", placeholder="0 a 10 pontos", default=str(skills.get("qualifying", 0)), max_length=2)
+        self.engine = discord.ui.TextInput(label="Motor", placeholder="0 a 10 pontos", default=str(skills.get("engine", 0)), max_length=2)
+        for item in (self.tyres, self.curves, self.speed, self.qualifying, self.engine):
+            self.add_item(item)
+
     async def on_submit(self, interaction):
         if interaction.user.id != self.owner_id:
             return await interaction.response.send_message("Esse formulário não é seu.", ephemeral=True)
         try:
-            values = [int(part.strip()) for part in self.distribution.value.split(",")]
-            if len(values) != 6: raise ValueError
-            skills = {field[0]: value for field, value in zip(SKILL_FIELDS, values)}
+            values = [int(item.value.strip()) for item in (self.tyres, self.curves, self.speed, self.qualifying, self.engine)]
         except ValueError:
-            return await interaction.response.send_message("Informe seis números na ordem: Gerenciamento de pneus, Curvas, Velocidade, Classificação, Motor e Controle.", ephemeral=True)
-        if any(value < 0 or value > 10 for value in skills.values()) or sum(skills.values()) != SKILL_POINTS:
-            return await interaction.response.send_message(f"Os seis atributos devem ser inteiros entre 0 e 10 e somar {SKILL_POINTS}.", ephemeral=True)
-        profile = gacha_profile(self.owner_id); profile["skills"] = skills; profile["skills_locked"] = True; save_profiles()
+            return await interaction.response.send_message("Preencha os cinco campos com números inteiros de 0 a 10.", ephemeral=True)
+        if any(value < 0 or value > SKILL_POINTS for value in values) or sum(values) > SKILL_POINTS:
+            return await interaction.response.send_message(f"Os cinco valores devem ficar entre 0 e {SKILL_POINTS} e não podem ultrapassar {SKILL_POINTS} pontos somados. Reabra a distribuição e tente novamente.", ephemeral=True)
+        partial = {field[0]: value for field, value in zip(SKILL_FIELDS[:5], values)}
+        await interaction.response.send_modal(ProfileControlSkillModal(
+            self.owner_id, self.source_message_id, self.race, partial
+        ))
+
+
+class ProfileControlSkillModal(discord.ui.Modal, title="Finalizar distribuição"):
+    def __init__(self, owner_id, source_message_id, race, partial):
+        super().__init__()
+        self.owner_id = owner_id
+        self.source_message_id = source_message_id
+        self.race = race
+        self.partial = partial
+        profile = gacha_profile(owner_id)
+        self.control = discord.ui.TextInput(
+            label="Controle",
+            placeholder="Informe os pontos de Controle",
+            default=str(profile["skills"].get("control", 0)),
+            max_length=2,
+        )
+        self.add_item(self.control)
+
+    async def on_submit(self, interaction):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("Esse formulário não é seu.", ephemeral=True)
+        try:
+            control_value = int(self.control.value.strip())
+        except ValueError:
+            return await interaction.response.send_message("Controle deve ser um número inteiro de 0 a 10.", ephemeral=True)
+        if not 0 <= control_value <= SKILL_POINTS:
+            return await interaction.response.send_message("Controle deve ficar entre 0 e 10.", ephemeral=True)
+        skills = dict(self.partial)
+        skills["control"] = control_value
+        if sum(skills.values()) != SKILL_POINTS:
+            return await interaction.response.send_message(
+                f"A distribuição precisa somar exatamente {SKILL_POINTS} pontos. Sua soma atual é {sum(skills.values())}. Reabra Distribuir pontos para ajustar os campos.",
+                ephemeral=True,
+            )
+        profile = gacha_profile(self.owner_id)
+        profile["skills"] = skills
+        profile["skills_locked"] = True
+        save_profiles()
         if self.race and self.owner_id in self.race.drivers and not self.race.started:
             driver = self.race.drivers[self.owner_id]
             for key, value in skills.items():
@@ -2713,8 +2910,12 @@ class ProfileSkillsModal(discord.ui.Modal, title="Distribuir 10 pontos pessoais"
             driver.braking = skills["qualifying"]
             driver.acceleration = skills["engine"]
             driver.ready = False
-        await interaction.response.send_message("✅ Distribuição salva no seu perfil. Você pode alterá-la novamente quando quiser, mesmo fora de uma corrida.", ephemeral=True)
+        await interaction.response.send_message(
+            "Distribuição salva! Os seis atributos foram identificados individualmente e somam 10 pontos.",
+            ephemeral=True,
+        )
         await refresh_profile_message(interaction, self.source_message_id, profile)
+
 
 class ProfileView(discord.ui.View):
     def __init__(self,owner_id): super().__init__(timeout=180);self.owner_id=owner_id
@@ -3128,6 +3329,41 @@ def find_style_by_keyword(keyword: str):
     if len(contains) == 1:
         return contains[0], contains
     return None, contains
+
+@bot.tree.command(name="diagnosticar_cargos_estilo", description="Verifica os IDs e a hierarquia dos cargos de estilo (admin)")
+@app_commands.checks.has_permissions(administrator=True)
+async def diagnosticar_cargos_estilo(interaction: discord.Interaction):
+    if interaction.guild is None:
+        return await interaction.response.send_message("Use este comando dentro do servidor.", ephemeral=True)
+    guild = interaction.guild
+    bot_member = guild.me
+    missing = []
+    above_bot = []
+    found_lines = []
+    for style_name, role_id in PILOT_ROLE_IDS.items():
+        role = guild.get_role(int(role_id)) if role_id else None
+        if role is None:
+            missing.append(f"• **{style_name}** — ID {role_id} não encontrado")
+            continue
+        found_lines.append(f"• **{style_name}** → {role.mention} ({role.name})")
+        if bot_member and role >= bot_member.top_role:
+            above_bot.append(f"• {role.mention} — acima/no mesmo nível do cargo do bot")
+    description = (
+        f"**IDs configurados:** {len(PILOT_ROLE_IDS)}\n"
+        f"**Cargos encontrados:** {len(found_lines)}\n"
+        f"**IDs não encontrados:** {len(missing)}\n"
+        f"**Cargos fora da hierarquia do bot:** {len(above_bot)}\n"
+        f"**Permissão Gerenciar cargos:** {'Sim' if bot_member and bot_member.guild_permissions.manage_roles else 'Não'}"
+    )
+    if missing:
+        description += "\n\n**IDs que não correspondem a cargos:**\n" + "\n".join(missing[:20])
+    if above_bot:
+        description += "\n\n**Cargos que o bot não consegue gerenciar:**\n" + "\n".join(above_bot[:20])
+    if not missing and not above_bot and bot_member and bot_member.guild_permissions.manage_roles:
+        description += "\n\nTodos os IDs foram encontrados e estão abaixo do cargo do bot. Se alguém ainda não recebe o cargo, use /sincronizar_estilo para corrigir o membro."
+    embed = discord.Embed(title="🔎 Diagnóstico dos cargos de estilo", description=description[:4000], color=discord.Color.blurple())
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 @bot.tree.command(name="setar_estilo", description="Define o estilo de um jogador pelo nome ou palavra-chave (admin)")
 @app_commands.describe(jogador="Pessoa que receberá o estilo", estilo="Nome ou palavra-chave, exemplo: prost, senna")
@@ -3636,54 +3872,77 @@ async def commands_list(ctx):
 
 @bot.command(name="ajuda")
 async def help_f1(ctx):
-    embed = discord.Embed(title="📘 Guia de corrida — F1 Discord Racing", color=discord.Color.green())
-    embed.description = (
-        "**Comece por aqui**\n"
-        "• Use `!f1` para corrida casual ou `!f1rank` para etapa oficial (precisa de temporada ativa). Entre no lobby, configure os 10 pontos, escolha pneus e marque Estou pronto.\n"
-        "• O host inicia a classificação e depois a corrida. Em cada trecho, escolha um botão; se o tempo acabar, o bot seleciona Seguro automaticamente.\n"
-        "• Consulte `!sistema` para ver a explicação de cada botão, Pit Stop, Safety Car, pneus e atributos.\n\n"
-        "**1) Escolha o tipo de corrida**\n"
-        "• `!f1`: corrida casual, até **10 pilotos**, não soma pontos no campeonato. Seus resultados entram no `!rankingnormal`.\n"
-        "• `!f1rank`: corrida oficial, até **10 pilotos**, disponível quando existe uma temporada ativa. Os resultados pontuam no `!ranking` e em `!campeonato`.\n"
-        "• O lobby oferece **Adicionar bots**: o criador escolhe quantos pilotos controlados pela IA entram, respeitando o limite de 10. Cada bot recebe nome de piloto, estilo aleatório, atributos e estratégia automática.\n"
-        "• São 15 circuitos disponíveis, com prévia esquemática da pista no embed do lobby.\n"
-        "• É possível manter mais de um lobby ativo ao mesmo tempo, inclusive no mesmo canal. Cada painel controla sua própria corrida. Lobbies que não iniciarem a corrida em 10 minutos são encerrados automaticamente.\n"
-        "• O criador pode cancelar com `!f1cancel`. Administradores podem encerrar o lobby de alguém com `!f1cancel @criador`.\n\n"
-        "**2) Entrar e preparar o carro**\n"
-        "Clique em **Entrar na corrida**, depois em **Configurar carro** para distribuir os 10 pontos entre Gerenciamento de pneus, Curvas, Velocidade, Classificação, Motor e Controle. A tela mostra os nomes e valores; escolha o atributo e depois a quantidade de pontos. Você pode ajustar a distribuição novamente quando quiser. Escolha também os pneus e marque **Estou pronto**.\n\n"
-        "**3) Classificação e largada**\n"
-        "O criador inicia a classificação pelo botão do lobby. O grid é definido por atributos, pneus, clima e variação aleatória. Depois, o criador usa **Iniciar corrida** no painel da classificação.\n\n"
-        "**4) Durante a corrida**\n"
-        "Cada volta possui seis trechos de reta e curva. Em cada trecho, os pilotos escolhem suas ações pelos botões do painel. As escolhas ficam ocultas até todos confirmarem. O prazo padrão é 45 segundos; quem não decidir recebe a opção Seguro.\n\n"
-        "**AÇÕES DE PILOTAGEM**\n"
-        "⚖️ **Normal:** ritmo equilibrado, risco padrão e pequena recuperação de energia.\n"
-        "🔥 **Agressivo:** mais ritmo e potencial de ataque, mas aumenta risco e desgaste.\n"
-        "🌀 **Por dentro:** tenta a linha mais curta na curva; ganha mais tempo, mas assume risco maior de contato.\n"
-        "🔵 **Por fora:** contorna a curva por uma linha mais longa; ganha menos tempo que por dentro, com risco menor.\n"
-        "🛡️ **Defender a linha:** prioriza proteger a posição e dificultar a ultrapassagem, sacrificando um pouco de ritmo.\n"
-        "🟢 **Traçado seguro:** escolhe a opção mais conservadora, com perda de tempo maior, mas menor chance de erro.\n"
-        "🛡️ **Defensivo:** protege posição e reduz riscos, com perda de ritmo.\n"
-        "🟢 **Seguro:** ritmo conservador, menor risco e desgaste.\n"
-        "↗️ **Overtake Mode:** tenta ultrapassar o carro à frente quando está dentro da janela de 1 segundo e há energia suficiente. Não garante a manobra.\n"
-        "⚡ **Boost Mode:** consome 15 de energia para buscar ritmo extra.\n\n"
-        "**5) CARRO, PNEUS E CLIMA**\n"
-        "• Gerenciamento de pneus reduz desgaste; Curvas melhora trechos técnicos; Velocidade favorece retas e ultrapassagens; Classificação melhora o grid; Motor ajuda na aceleração; Controle melhora disputas e reduz erros. Os pontos e bônus do estilo agora têm efeito mais perceptível.\n"
-        "• Soft é rápido e desgasta mais; Medium equilibra; Hard dura mais; Intermediate é indicado para pista úmida; Wet é indicado para chuva forte. Pneus inadequados provocam perda de ritmo, desgaste e risco adicionais.\n"
-        "• Cada piloto tem 2 jogos de pneus no total: o jogo inicial e uma troca. O Pit Stop abre um menu privado para escolher o composto. Uma parada normal custa cerca de 18s + equipe; parar cedo demais pode fazer você perder posições.\n"
-        "• O desgaste agora afeta o tempo de cada trecho de forma progressiva. Gerenciamento de pneus reduz o desgaste; Soft desgasta mais e Hard dura mais. Planeje a única troca em corridas longas.\n"
-        "• Safety Car é raro e reservado a acidentes graves ou abandonos. Durante a janela ativa, o botão **Pit Stop (Safety Car)** permite parar por cerca de 6s + equipe, contra 18s + equipe em ritmo normal. A vantagem termina quando a janela acaba.\n"
-        "• Energia recupera um pouco com Normal e Seguro. Pit stops também reparam parte do dano do carro.\n"
-        "• Erros, derrapagens, acidentes e mudanças de clima são probabilísticos. A transmissão informa ultrapassagens, incidentes e acontecimentos importantes.\n\n"
-        "**6) PONTUAÇÃO E RANKINGS**\n"
-        "• Corridas casuais (`!f1`): ranking separado, com pontos e partidas jogadas. A pontuação é 10, 8, 6, 5, 4, 3, 2 e 1 para as oito primeiras posições. Consulte `!rankingnormal`.\n"
-        "• Corridas com menos de 3 jogadores humanos ou com bots em maioria não pontuam nos rankings. Bots nunca recebem pontos.\n"
-        "• Corridas oficiais (`!f1rank`): 1º = 10, 2º = 7, 3º = 5, 4º = 3, 5º = 1; +1 pela volta mais rápida se terminar no top 3. Provas de até 3 voltas valem 50% dos pontos; de 5 voltas, 75%; de 10 ou mais, 100%. Abandono não pontua.\n"
-        "• Use `!ranking`, `!campeonato`, `!temporada`, `!resultado` e `!estatisticas` para consultar a temporada.\n\n"
-        "**7) PERFIL E HABILIDADES**\n"
-        "`!perfil` mostra seu piloto. Ao abrir **Configurar**, os campos vêm preenchidos com os dados atuais; altere somente o que desejar e mantenha os demais valores. Estilos e habilidades são únicos/equipados, não coleções acumuláveis. Use `!roll-estilo` e `!roll-habilidade` para obter novos resultados."
-    )
-    embed.set_footer(text="As mecânicas são uma simulação simplificada e não reproduzem integralmente as regras oficiais da F1.")
-    await ctx.send(embed=embed)
+    pages = [
+        discord.Embed(
+            title="📘 Guia de corrida — Começando",
+            description=(
+                "**Tipos de corrida**\n"
+                "• !f1: corrida casual; resultados entram no !rankingnormal.\n"
+                "• !f1rank: corrida oficial; exige uma temporada ativa e pontua no campeonato.\n"
+                "• Os lobbies aceitam até 10 pilotos e podem incluir bots. O host configura voltas, circuito, clima e tempo de decisão.\n"
+                "• É possível manter vários lobbies ativos. Eles expiram após 10 minutos sem iniciar. O criador usa !f1cancel; administradores podem usar !f1cancel @criador.\n\n"
+                "**Entrar e preparar o carro**\n"
+                "1. Clique em Entrar na corrida.\n"
+                "2. Use Configurar carro para distribuir exatamente 10 pontos entre Gerenciamento de pneus, Curvas, Velocidade, Classificação, Motor e Controle.\n"
+                "3. Escolha um composto em Escolher pneus e depois clique em Estou pronto.\n"
+                "4. O host inicia a classificação e, em seguida, a corrida. A classificação define o grid de largada.\n\n"
+                "**Durante a corrida**\n"
+                "• Cada volta tem seis trechos de reta e curva. Em cada trecho, escolha uma ação no painel.\n"
+                "• As decisões ficam ocultas até a etapa terminar. Se o tempo acabar, o bot escolhe Seguro automaticamente.\n"
+                "• Consulte !sistema para ver o passo a passo dos botões."
+            ),
+            color=discord.Color.green(),
+        ),
+        discord.Embed(
+            title="🎮 Guia de corrida — Pilotagem e carro",
+            description=(
+                "**Ações nas retas**\n"
+                "• Manter ritmo: ritmo equilibrado e pequena recuperação de energia.\n"
+                "• Defender posição: protege sua colocação, sacrificando um pouco de ritmo.\n"
+                "• DRS / Ultrapassar: tenta passar o carro à frente quando está até 1 segundo dele; consome 12 de energia e não garante a manobra.\n"
+                "• Boost Mode: consome 15 de energia para ganhar ritmo naquele trecho.\n\n"
+                "**Ações nas curvas**\n"
+                "• Por dentro: linha mais curta e rápida, mas com maior risco de contato.\n"
+                "• Por fora: linha mais longa e com risco menor.\n"
+                "• Defender a linha: protege posição, com pequena perda de ritmo.\n"
+                "• Traçado seguro: sacrifica tempo para reduzir o risco de erro.\n\n"
+                "**Pneus, clima e pit stop**\n"
+                "• Soft é rápido e desgasta mais; Medium equilibra; Hard dura mais. Intermediate serve para pista úmida e Wet para chuva forte.\n"
+                "• O desgaste afeta o tempo dos trechos. Gerenciamento de pneus reduz o desgaste.\n"
+                "• Cada piloto tem o jogo inicial e uma troca de pneus. O pit stop normal custa cerca de 18s + equipe; parar cedo pode fazer perder posições.\n"
+                "• Durante a janela do Safety Car, a parada cai para cerca de 6s + equipe. A vantagem termina quando a janela acaba.\n"
+                "• O dano do carro aumenta o tempo dos trechos. No pit stop, escolha também reparar a asa: recupera até 30% de dano adicional e acrescenta 4 segundos à parada.\n"
+                "• Mudanças de clima, derrapagens, acidentes e estouros de pneu são probabilísticos."
+            ),
+            color=discord.Color.blue(),
+        ),
+        discord.Embed(
+            title="🏆 Guia de corrida — Pontuação e perfil",
+            description=(
+                "**Rankings**\n"
+                "• Casual: 10, 8, 6, 5, 4, 3, 2 e 1 ponto(s) para as oito primeiras posições. Consulte !rankingnormal.\n"
+                "• Oficial: 1º = 10, 2º = 7, 3º = 5, 4º = 3 e 5º = 1 ponto; +1 pela volta mais rápida se terminar no top 3.\n"
+                "• Provas oficiais de até 3 voltas valem 50%; até 5 voltas, 75%; provas maiores, 100%. Abandono não pontua.\n"
+                "• Corridas com menos de 3 jogadores humanos ou com bots em maioria não pontuam. Bots nunca recebem pontos.\n\n"
+                "**Atributos**\n"
+                "• Gerenciamento de pneus reduz desgaste. Curvas melhora trechos técnicos. Velocidade favorece retas. Classificação melhora o grid. Motor ajuda na aceleração. Controle melhora disputas e reduz erros.\n\n"
+                "**Perfil e estilos**\n"
+                "• !perfil mostra seu piloto. Em Configurar, altere nome, idade, equipe e foto. Em Distribuir pontos, os seis atributos devem somar exatamente 10.\n"
+                "• Estilos e habilidades são únicos/equipados. Ao aceitar um novo estilo, ele substitui o anterior. Use !roll-estilo e !roll-habilidade para obter novos resultados.\n"
+                "• !sistema abre o guia interativo completo; !comandos lista os comandos disponíveis."
+            ),
+            color=discord.Color.gold(),
+        ),
+    ]
+    pages[0].set_footer(text="Página 1/3 • Começando")
+    pages[1].set_footer(text="Página 2/3 • Pilotagem")
+    pages[2].set_footer(text="Página 3/3 • Pontuação e perfil")
+    try:
+        await ctx.send(embeds=pages)
+    except discord.HTTPException:
+        await ctx.send("Não consegui enviar o guia em embeds. Use !sistema para abrir o guia interativo.")
+
+
 
 
 STYLE_IMAGE_FILE = Path(__file__).parent / "assets" / "estilos" / "links.json"
