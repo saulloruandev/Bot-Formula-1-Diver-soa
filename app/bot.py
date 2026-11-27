@@ -1757,9 +1757,9 @@ def segment_base_time(segment, circuit):
 def skill_segment_bonus(driver, segment):
     if segment == "reta":
         # Reta e aceleração predominam; reta impacta a velocidade média.
-        return driver.effective_skill("straights") * 0.055 + driver.effective_skill("acceleration") * 0.035
+        return driver.effective_skill("straights") * 0.095 + driver.effective_skill("acceleration") * 0.065
     # Curva, frenagem e controle fazem diferença na zona técnica.
-    return driver.effective_skill("curves") * 0.065 + driver.effective_skill("control") * 0.045
+    return driver.effective_skill("curves") * 0.105 + driver.effective_skill("control") * 0.075
 
 
 def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opponent=None):
@@ -1822,16 +1822,16 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     if segment == "curva":
         line = action.get("line")
         if line == "inside":
-            mode_adjustment -= 0.035
-            line_risk += 0.012
+            mode_adjustment -= 0.055
+            line_risk += 0.020
         elif line == "outside":
-            mode_adjustment -= 0.018
+            mode_adjustment -= 0.030
         elif line == "defend":
-            mode_adjustment += 0.012
-            line_risk -= 0.012
+            mode_adjustment += 0.005
+            line_risk -= 0.018
         elif line == "safe":
-            mode_adjustment += 0.025
-            line_risk -= 0.020
+            mode_adjustment += 0.035
+            line_risk -= 0.035
 
     # Energia de jogo substitui um uso simplificado da gestão elétrica:
     # Boost consome energia e dá bônus, Overtake Mode consome energia quando elegível.
@@ -1866,18 +1866,18 @@ def calculate_segment_time(driver, race, segment, action, opponent_gap=None, opp
     time = base - skill_bonus - (tire_condition * 0.12) + tire_loss + weather_loss + mismatch_loss + mode_adjustment + energy_adjustment + random_error + base * damage_penalty + pit_penalty
 
     curve_intensity = 1.0 if segment == "curva" else 0.35
-    risk = 0.025 + mode["risk"] + line_risk + rain * (0.12 if segment == "curva" else 0.06)
+    risk = 0.010 + mode["risk"] + line_risk + rain * (0.075 if segment == "curva" else 0.035)
     if wrong_tire:
         risk += 0.055 if rain > 0.65 else 0.025
-    risk += (driver.tire_wear / 100) * 0.20 + (driver.car_damage / 100) * 0.12
-    risk += curve_intensity * max(0, 5 - driver.effective_skill("curves")) * 0.012
-    risk += curve_intensity * max(0, 5 - driver.effective_skill("control")) * 0.014
+    risk += (driver.tire_wear / 100) * 0.11 + (driver.car_damage / 100) * 0.085
+    risk += curve_intensity * max(0, 5 - driver.effective_skill("curves")) * 0.008
+    risk += curve_intensity * max(0, 5 - driver.effective_skill("control")) * 0.009
     if driver.ability == "Mãos de Cirurgião":
         risk -= 0.008
     if driver.ability == "Sangue Frio" and action["mode"] == "aggressive":
         risk -= 0.006
     risk += max(0, -mode["pace"]) * 0.30  # agressividade/ação rápida
-    risk = max(0.008, min(0.52, risk))
+    risk = max(0.004, min(0.30, risk))
 
     if random.random() < risk:
         severity = random.random()
@@ -2350,6 +2350,7 @@ async def run_race(race):
         driver.distance = float(rank)
     circuit = CIRCUITS[race.circuit_name]
     segments = circuit.get("segments") or ["reta", "curva"]
+    resume_segment_index = 1
     for lap in range(1, race.total_laps + 1):
         if race.early_finish:
             break
@@ -2366,7 +2367,9 @@ async def run_race(race):
             weather_event = f"🌦️ Mudança de clima: {previous_weather} -> {race.weather_name}. Pista {race.surface.lower()}."
             lap_events.append(weather_event)
             await publish_important_event(race, weather_event)
-        for segment_index, segment in enumerate(segments, 1):
+        safety_car_triggered_this_lap = False
+        for segment_index in range(resume_segment_index, len(segments) + 1):
+            segment = segments[segment_index - 1]
             race.current_segment = segment_index
             race.current_segment_type = segment
             active = [d for d in race.drivers.values() if not d.finished and not d.retired]
@@ -2414,10 +2417,10 @@ async def run_race(race):
                 target = pre_order[index - 1]
                 prior_gap = gaps.get(driver.user.id)
                 if action.get("attack") and prior_gap is not None and prior_gap <= OVERTAKE_DETECTION_SECONDS:
-                    chance = 0.22 + driver.effective_skill("straights") * 0.025 + driver.effective_skill("acceleration") * 0.018 + driver.effective_skill("control") * 0.008
+                    chance = 0.18 + driver.effective_skill("straights") * 0.035 + driver.effective_skill("acceleration") * 0.025 + driver.effective_skill("control") * 0.015
                     if driver.ability in ("Ultrapassador Nato", "Especialista em DRS"):
                         chance += 0.035
-                    chance -= target.control * 0.012
+                    chance -= target.effective_skill("control") * 0.018
                     if target.ability == "Defensor Nato":
                         chance -= 0.035
                     chance = max(0.08, min(0.68, chance))
@@ -2452,8 +2455,10 @@ async def run_race(race):
             incident = any("acidente" in event.lower() or "abandono" in event.lower() for event in lap_events)
             still_running = [d for d in race.drivers.values() if not d.retired]
             if incident and len(still_running) > 1 and race.safety_car_laps == 0 and random.random() < 0.55:
-                race.safety_car_laps = 2
-                safety_event = "🚨 SAFETY CAR NA PISTA! Neutralização até o fim desta volta e por mais uma volta completa para limpeza da pista. Pit stops têm perda reduzida."
+                race.safety_car_laps = 1
+                safety_car_triggered_this_lap = True
+                resume_segment_index = segment_index
+                safety_event = f"🚨 SAFETY CAR! O pelotão avançará para a volta {lap + 1}, trecho {segment_index}/{len(segments)}. A próxima decisão será sob Safety Car, com pit stop de perda reduzida."
                 lap_events.append(safety_event)
                 await publish_important_event(race, safety_event)
             if race.safety_car_laps > 0 and len(still_running) > 1:
@@ -2467,6 +2472,12 @@ async def run_race(race):
                 await race.message.edit(embed=panel_embed, view=ClosedView())
             await flush_race_broadcasts(race)
             lap_events.clear()
+            if safety_car_triggered_this_lap:
+                # Pula o restante da volta atual e retoma no mesmo setor na próxima volta.
+                break
+            if race.safety_car_laps > 0:
+                race.safety_car_laps = 0
+                resume_segment_index = 1
             still_active = [d for d in race.drivers.values() if not d.finished and not d.retired]
             if len(still_active) == 1:
                 still_active[0].finished = True
@@ -2487,8 +2498,9 @@ async def run_race(race):
                 if minimum_valid_lap <= driver.last_lap_time < (driver.best_lap_time or float("inf")):
                     driver.best_lap_time = driver.last_lap_time
                     driver.best_lap_number = lap
-        if race.safety_car_laps > 0:
-            race.safety_car_laps -= 1
+        if race.safety_car_laps > 0 and not safety_car_triggered_this_lap:
+            race.safety_car_laps = 0
+            resume_segment_index = 1
         await asyncio.sleep(0.5)
     final_order = current_order(race)
     for driver in final_order:
